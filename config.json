@@ -1,0 +1,110 @@
+{
+  "_comment": "轻量化桌面AI效率助手 - 应用配置文件。敏感字段（api_key）请通过 .env 配置，不要直接写在此处。路径支持 Windows 环境变量，如 %USERPROFILE%。",
+
+  "app_name": "轻量化桌面AI效率助手",
+  "pet_name": "图图助手",
+  "log_level": "INFO",
+
+  "ai": {
+    "provider": "openai",
+    "api_key": "",
+    "base_url": "",
+    "model": "gpt-4o-mini",
+    "temperature": 0.7,
+    "max_tokens": 1024,
+    "system_prompt": "你是一个专注于日常办公、学习和资料处理的桌面AI效率助手，名叫图图助手。请用简洁自然的中文回答问题，优先给出可操作的建议。",
+    "enable_ai_cache": true
+  },
+
+  "ui": {
+    "theme": "dark",
+    "font_size": 14,
+    "window_width": 420,
+    "window_height": 680,
+    "always_on_top": false
+  },
+
+  "behavior": {
+    "idle_sleep_minutes": 10,
+    "cpu_sleep_threshold": 80,
+    "_comment_blacklist": "填写需要触发休眠的进程名（如游戏进程 steam.exe），留空则不启用黑名单检测",
+    "blacklist_processes": []
+  },
+
+  "search": {
+    "engine": "bing",
+    "engines": {
+      "bing":   "https://www.bing.com/search?q=",
+      "baidu":  "https://www.baidu.com/s?wd=",
+      "google": "https://www.google.com/search?q="
+    }
+  },
+
+  "quick_apps": [
+    {
+      "name": "浏览器",
+      "command": "",
+      "comment": "留空则使用系统默认浏览器；也可填写路径如 C:\\Program Files\\...\\chrome.exe"
+    },
+    {
+      "name": "微信",
+      "command": "%USERPROFILE%\\AppData\\Roaming\\Tencent\\WeChat\\WeChat.exe",
+      "comment": "微信默认安装路径，如不符请修改"
+    },
+    {
+      "name": "Word",
+      "command": "WINWORD.EXE",
+      "comment": "Office 已加入 PATH 时可直接使用命令名；否则填写完整路径"
+    },
+    {
+      "name": "Excel",
+      "command": "EXCEL.EXE",
+      "comment": "同 Word"
+    },
+    {
+      "name": "计算器",
+      "command": "calc.exe",
+      "comment": "Windows 内置计算器"
+    },
+    {
+      "name": "记事本",
+      "command": "notepad.exe",
+      "comment": "Windows 内置记事本"
+    }
+  ],
+
+  "quick_folders": [
+    {
+      "name": "桌面",
+      "path": "%USERPROFILE%\\Desktop"
+    },
+    {
+      "name": "下载",
+      "path": "%USERPROFILE%\\Downloads"
+    },
+    {
+      "name": "文档",
+      "path": "%USERPROFILE%\\Documents"
+    },
+    {
+      "name": "图片",
+      "path": "%USERPROFILE%\\Pictures"
+    },
+    {
+      "name": "项目",
+      "path": "%USERPROFILE%\\Projects",
+      "comment": "请修改为你的实际项目目录"
+    },
+    {
+      "name": "截图",
+      "path": "%USERPROFILE%\\Pictures\\TutuAssistantScreenshots",
+      "comment": "与 screenshot.save_dir 保持一致"
+    }
+  ],
+
+  "screenshot": {
+    "save_dir": "%USERPROFILE%\\Pictures\\TutuAssistantScreenshots",
+    "format": "png",
+    "auto_open": false
+  }
+}

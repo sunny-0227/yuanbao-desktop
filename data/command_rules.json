@@ -1,0 +1,134 @@
+{
+  "_comment": "本地指令规则配置（日常办公效率场景）。每条规则字段：action（动作标识）、type（分类）、keywords（触发关键词）、description（说明）。只需在此文件增减条目即可扩展指令，无需改代码。",
+
+  "rules": [
+
+    { "action": "open_wechat",   "type": "quick_app",
+      "keywords": ["打开微信", "开微信", "打微信"],
+      "description": "打开微信" },
+
+    { "action": "open_browser",  "type": "quick_app",
+      "keywords": ["打开浏览器", "开浏览器", "打浏览器", "上网"],
+      "description": "打开默认浏览器" },
+
+    { "action": "open_word",     "type": "quick_app",
+      "keywords": ["打开word", "打开Word", "开word", "开Word", "打开文档软件"],
+      "description": "打开 Microsoft Word" },
+
+    { "action": "open_excel",    "type": "quick_app",
+      "keywords": ["打开excel", "打开Excel", "开excel", "开Excel", "打开表格软件"],
+      "description": "打开 Microsoft Excel" },
+
+    { "action": "open_calculator", "type": "quick_app",
+      "keywords": ["打开计算器", "开计算器", "计算器"],
+      "description": "打开系统计算器" },
+
+    { "action": "open_notepad",  "type": "quick_app",
+      "keywords": ["打开记事本", "开记事本", "记事本"],
+      "description": "打开系统记事本" },
+
+
+    { "action": "open_folder_desktop",     "type": "quick_folder",
+      "keywords": ["打开桌面", "去桌面", "桌面文件夹"],
+      "description": "打开桌面文件夹" },
+
+    { "action": "open_folder_downloads",   "type": "quick_folder",
+      "keywords": ["打开下载", "下载文件夹", "打开下载目录"],
+      "description": "打开下载文件夹" },
+
+    { "action": "open_folder_documents",   "type": "quick_folder",
+      "keywords": ["打开文档", "文档文件夹", "打开我的文档"],
+      "description": "打开文档文件夹" },
+
+    { "action": "open_folder_pictures",    "type": "quick_folder",
+      "keywords": ["打开图片", "图片文件夹", "打开我的图片"],
+      "description": "打开图片文件夹" },
+
+    { "action": "open_folder_projects",    "type": "quick_folder",
+      "keywords": ["打开项目目录", "打开项目", "项目文件夹"],
+      "description": "打开项目目录" },
+
+    { "action": "open_folder_screenshots", "type": "quick_folder",
+      "keywords": ["打开截图目录", "截图文件夹", "查看截图"],
+      "description": "打开截图保存目录" },
+
+
+    { "action": "screenshot",    "type": "screenshot",
+      "keywords": ["截图", "截个图", "截一下屏", "保存截图", "抓屏"],
+      "description": "截图并保存到截图目录" },
+
+
+    { "action": "web_search",    "type": "web_search",
+      "keywords": ["搜索", "查一下", "帮我搜", "百度搜索", "必应搜索", "bing搜索", "谷歌搜索"],
+      "description": "在浏览器中打开搜索结果" },
+
+
+    { "action": "add_note",      "type": "quick_note",
+      "keywords": ["记一下", "帮我记一下", "记录一下", "记下来", "帮我记"],
+      "description": "添加一条快速笔记" },
+
+    { "action": "list_notes",    "type": "quick_note",
+      "keywords": ["查看笔记", "我的笔记", "笔记列表", "看看笔记"],
+      "description": "显示所有快速笔记" },
+
+    { "action": "clear_notes",   "type": "quick_note",
+      "keywords": ["清空笔记", "删除所有笔记", "清除笔记"],
+      "description": "清空所有快速笔记" },
+
+
+    { "action": "add_reminder",  "type": "todo",
+      "keywords": ["提醒我", "帮我提醒", "设个提醒", "添加提醒", "定个提醒"],
+      "description": "添加一条定时提醒" },
+
+    { "action": "list_reminders", "type": "todo",
+      "keywords": ["查看提醒", "我的提醒", "提醒列表", "有哪些提醒", "查看待办", "待办列表", "我的待办", "查看todo"],
+      "description": "查看所有提醒" },
+
+    { "action": "delete_reminder", "type": "todo",
+      "keywords": ["删除提醒", "取消提醒", "移除提醒", "删除待办", "取消待办", "移除待办"],
+      "description": "删除指定提醒" },
+
+
+    { "action": "system_status_all", "type": "system_status",
+      "keywords": ["查看电脑状态", "电脑状态", "系统状态", "电脑怎么样"],
+      "description": "综合查看 CPU/内存/磁盘状态" },
+
+    { "action": "check_cpu",     "type": "system_status",
+      "keywords": ["查看cpu", "cpu使用率", "cpu占用", "处理器使用"],
+      "description": "查询 CPU 使用率" },
+
+    { "action": "check_memory",  "type": "system_status",
+      "keywords": ["查看内存", "内存使用", "内存占用", "ram使用"],
+      "description": "查询内存使用情况" },
+
+    { "action": "check_disk",    "type": "system_status",
+      "keywords": ["查看硬盘", "硬盘使用", "磁盘使用", "存储空间", "查硬盘"],
+      "description": "查询磁盘使用情况" },
+
+    { "action": "check_battery", "type": "system_status",
+      "keywords": ["查看电量", "电池电量", "剩余电量", "电量多少"],
+      "description": "查询电池电量" },
+
+
+    { "action": "lock_screen",   "type": "system_control",
+      "keywords": ["锁屏", "锁定屏幕", "锁定电脑"],
+      "description": "锁定 Windows 屏幕" },
+
+    { "action": "mute",          "type": "system_control",
+      "keywords": ["静音", "关闭声音", "关声音"],
+      "description": "系统静音" },
+
+    { "action": "unmute",        "type": "system_control",
+      "keywords": ["取消静音", "恢复声音", "打开声音"],
+      "description": "取消系统静音" },
+
+    { "action": "volume_up",     "type": "system_control",
+      "keywords": ["音量增加", "声音大一点", "调高音量", "音量加"],
+      "description": "调高系统音量" },
+
+    { "action": "volume_down",   "type": "system_control",
+      "keywords": ["音量降低", "声音小一点", "调低音量", "音量减"],
+      "description": "调低系统音量" }
+
+  ]
+}

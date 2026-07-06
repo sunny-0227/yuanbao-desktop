@@ -1,0 +1,37 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 打包文件
+build/
+dist/
+*.spec
+*.exe
+
+# 环境变量和密钥
+.env
+
+# 日志文件
+*.log
+logs/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# IDE 配置
+.idea/
+.vscode/
+
+# 临时缓存
+data/chat_cache.json
+
+# 截图缓存
+screenshots/
