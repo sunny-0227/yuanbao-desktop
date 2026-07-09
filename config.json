@@ -1,15 +1,19 @@
 {
-  "_comment": "轻量化桌面AI效率助手 - 应用配置文件。敏感字段（api_key）请通过 .env 配置，不要直接写在此处。路径支持 Windows 环境变量，如 %USERPROFILE%。",
+  "_comment": "图图助手配置文件。敏感字段（AI API Key）请在 .env 中配置，不要写在这里。路径支持 Windows 环境变量，如 %USERPROFILE%。",
 
   "app_name": "轻量化桌面AI效率助手",
   "pet_name": "图图助手",
   "log_level": "INFO",
 
   "ai": {
-    "provider": "openai",
+    "provider": "freellmapi",
+    "_comment_provider": "可选值：none（禁用AI）/ direct（直连OpenAI等）/ freellmapi（本地代理）",
     "api_key": "",
+    "_comment_key": "留空，请在 .env 文件中配置 AI_API_KEY",
     "base_url": "",
-    "model": "gpt-4o-mini",
+    "_comment_url": "留空则使用 .env 中的 AI_API_BASE_URL；FreeLLMAPI 默认为 http://localhost:3001/v1",
+    "model": "auto",
+    "_comment_model": "FreeLLMAPI 使用 auto；OpenAI 可填 gpt-4o-mini；DeepSeek 填 deepseek-chat",
     "temperature": 0.7,
     "max_tokens": 1024,
     "system_prompt": "你是一个专注于日常办公、学习和资料处理的桌面AI效率助手，名叫图图助手。请用简洁自然的中文回答问题，优先给出可操作的建议。",
@@ -19,8 +23,8 @@
   "ui": {
     "theme": "dark",
     "font_size": 14,
-    "window_width": 420,
-    "window_height": 680,
+    "window_width": 460,
+    "window_height": 660,
     "always_on_top": false
   },
 
@@ -44,32 +48,57 @@
     {
       "name": "浏览器",
       "command": "",
-      "comment": "留空则使用系统默认浏览器；也可填写路径如 C:\\Program Files\\...\\chrome.exe"
+      "_comment": "留空则使用系统默认浏览器"
+    },
+    {
+      "name": "Edge",
+      "command": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "_comment": "Microsoft Edge 默认路径，如不符请修改"
+    },
+    {
+      "name": "Chrome",
+      "command": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "_comment": "Google Chrome 默认路径，如不符请修改"
     },
     {
       "name": "微信",
       "command": "%USERPROFILE%\\AppData\\Roaming\\Tencent\\WeChat\\WeChat.exe",
-      "comment": "微信默认安装路径，如不符请修改"
+      "_comment": "微信默认安装路径，如不符请修改"
     },
     {
       "name": "Word",
       "command": "WINWORD.EXE",
-      "comment": "Office 已加入 PATH 时可直接使用命令名；否则填写完整路径"
+      "_comment": "Office 已加入 PATH 时可直接使用命令名；否则填写完整路径"
     },
     {
       "name": "Excel",
       "command": "EXCEL.EXE",
-      "comment": "同 Word"
+      "_comment": "同 Word"
+    },
+    {
+      "name": "PowerPoint",
+      "command": "POWERPNT.EXE",
+      "_comment": "同 Word"
     },
     {
       "name": "计算器",
       "command": "calc.exe",
-      "comment": "Windows 内置计算器"
+      "_comment": "Windows 内置计算器"
     },
     {
       "name": "记事本",
       "command": "notepad.exe",
-      "comment": "Windows 内置记事本"
+      "_comment": "Windows 内置记事本"
+    },
+    {
+      "name": "Cursor",
+      "command": "%LOCALAPPDATA%\\Programs\\cursor\\Cursor.exe",
+      "_comment": "Cursor IDE 默认安装路径，如不符请修改"
+    },
+    {
+      "name": "VS Code",
+      "command": "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe",
+      "_comment": "VS Code 默认安装路径"
     }
   ],
 
@@ -83,6 +112,10 @@
       "path": "%USERPROFILE%\\Downloads"
     },
     {
+      "name": "下载目录",
+      "path": "%USERPROFILE%\\Downloads"
+    },
+    {
       "name": "文档",
       "path": "%USERPROFILE%\\Documents"
     },
@@ -93,12 +126,16 @@
     {
       "name": "项目",
       "path": "%USERPROFILE%\\Projects",
-      "comment": "请修改为你的实际项目目录"
+      "_comment": "请修改为你的实际项目目录"
     },
     {
       "name": "截图",
       "path": "%USERPROFILE%\\Pictures\\TutuAssistantScreenshots",
-      "comment": "与 screenshot.save_dir 保持一致"
+      "_comment": "与 screenshot.save_dir 保持一致"
+    },
+    {
+      "name": "截图目录",
+      "path": "%USERPROFILE%\\Pictures\\TutuAssistantScreenshots"
     }
   ],
 

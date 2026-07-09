@@ -12,6 +12,7 @@
 
 import json
 import os
+import threading
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -19,7 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QFrame, QMessageBox,
     QSpinBox,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QFont
 
 from app.app_context import resource_path
@@ -147,9 +148,12 @@ class SettingsWindow(QWidget):
     调用 open() 而不是 show()，确保每次打开都刷新数据。
     """
 
+    _test_result = Signal(bool, str)   # 测试 AI 连接结果信号（跨线程回调到主线程）
+
     def __init__(self, theme: str = "dark", parent=None):
         super().__init__(parent)
         self._theme = theme
+        self._test_result.connect(self._on_test_ai_done)
         self._init_window()
         self._build_ui()
         self._apply_style()
@@ -304,25 +308,79 @@ class SettingsWindow(QWidget):
 
     def _build_ai_section(self):
         self._content_layout.addWidget(self._section_label("🤖 AI 配置"))
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(10)
 
-        # 缓存开关
-        self._ai_cache_check = QCheckBox("启用 AI 回复本地缓存")
-        self._ai_cache_check.setToolTip("开启后相同问题的 AI 回复会缓存到本地，加快响应速度")
-        self._content_layout.addWidget(self._ai_cache_check)
+        # AI 接入方式
+        self._ai_provider_box = QComboBox()
+        self._ai_provider_box.addItems(["none", "freellmapi", "direct"])
+        self._ai_provider_box.setToolTip(
+            "none = 禁用AI\n"
+            "freellmapi = 本地代理（推荐，需先启动 FreeLLMAPI）\n"
+            "direct = 直连 OpenAI / DeepSeek 等"
+        )
+        form.addRow("接入方式：", self._ai_provider_box)
 
-        # API Key 说明（只读提示，不显示实际 key）
+        # API Base URL
+        self._ai_base_url_edit = QLineEdit()
+        self._ai_base_url_edit.setPlaceholderText(
+            "FreeLLMAPI: http://localhost:3001/v1  |  OpenAI: https://api.openai.com/v1"
+        )
+        self._ai_base_url_edit.setToolTip("也可在 .env 中设置 AI_API_BASE_URL（优先级更高）")
+        form.addRow("API 地址：", self._ai_base_url_edit)
+
+        # API Key（可切换显示/隐藏）
+        key_row = QHBoxLayout()
+        self._ai_key_edit = QLineEdit()
+        self._ai_key_edit.setPlaceholderText("建议留空，在 .env 中配置 AI_API_KEY")
+        self._ai_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._ai_key_edit.setToolTip("填写后会保存到 config.json（明文）；建议改用 .env 文件")
+        key_row.addWidget(self._ai_key_edit)
+        self._ai_key_toggle = QPushButton("显示")
+        self._ai_key_toggle.setFixedWidth(48)
+        self._ai_key_toggle.setCheckable(True)
+        self._ai_key_toggle.toggled.connect(self._toggle_key_visibility)
+        key_row.addWidget(self._ai_key_toggle)
+        key_widget = QWidget()
+        key_widget.setLayout(key_row)
+        form.addRow("API Key：", key_widget)
+
+        # 模型名称
+        self._ai_model_edit = QLineEdit()
+        self._ai_model_edit.setPlaceholderText(
+            "FreeLLMAPI: auto  |  OpenAI: gpt-4o-mini  |  DeepSeek: deepseek-chat"
+        )
+        self._ai_model_edit.setToolTip("也可在 .env 中设置 AI_MODEL_NAME（优先级更高）")
+        form.addRow("模型名称：", self._ai_model_edit)
+
+        # AI 缓存开关
+        self._ai_cache_check = QCheckBox("启用 AI 回复本地缓存（相同问题不重复请求）")
+        form.addRow("", self._ai_cache_check)
+
+        self._content_layout.addLayout(form)
+
+        # .env 说明
         tip = QLabel(
-            "💡 AI API Key、模型名称、接口地址等敏感信息\n"
-            "   请在项目根目录的 <b>.env</b> 文件中配置：\n"
-            "   <code>AI_API_KEY=sk-xxxx</code>\n"
-            "   <code>AI_API_BASE_URL=https://api.openai.com/v1</code>\n"
-            "   <code>AI_MODEL_NAME=gpt-4o-mini</code>"
+            "💡 敏感信息（API Key）推荐在 <b>.env</b> 文件中配置，优先级高于此处：\n"
+            "   AI_API_KEY=freellmapi-你的key\n"
+            "   AI_API_BASE_URL=http://localhost:3001/v1\n"
+            "   AI_MODEL_NAME=auto"
         )
         tip.setObjectName("TipLabel")
         tip.setTextFormat(Qt.TextFormat.RichText)
         tip.setWordWrap(True)
-        tip.setContentsMargins(0, 4, 0, 0)
+        tip.setContentsMargins(0, 4, 0, 4)
         self._content_layout.addWidget(tip)
+
+        # 测试 AI 连接按钮
+        self._test_ai_btn = QPushButton("🔗  测试 AI 连接")
+        self._test_ai_btn.setObjectName("TestAIButton")
+        self._test_ai_btn.setFixedHeight(32)
+        self._test_ai_btn.setToolTip("使用当前配置发送一条测试消息，验证 AI 是否可用")
+        self._test_ai_btn.clicked.connect(self._on_test_ai)
+        self._content_layout.addWidget(self._test_ai_btn)
 
         self._content_layout.addWidget(self._divider())
 
@@ -431,8 +489,15 @@ class SettingsWindow(QWidget):
             raw.get("screenshot", {}).get("save_dir", "")
         )
 
-        # AI 缓存
-        enable_cache = raw.get("ai", {}).get("enable_ai_cache", True)
+        # AI 配置
+        ai = raw.get("ai", {})
+        provider = ai.get("provider", "freellmapi")
+        idx = self._ai_provider_box.findText(provider)
+        self._ai_provider_box.setCurrentIndex(max(0, idx))
+        self._ai_base_url_edit.setText(ai.get("base_url", ""))
+        self._ai_key_edit.setText(ai.get("api_key", ""))
+        self._ai_model_edit.setText(ai.get("model", ""))
+        enable_cache = ai.get("enable_ai_cache", True)
         self._ai_cache_check.setChecked(bool(enable_cache))
 
         # 快捷应用
@@ -451,6 +516,74 @@ class SettingsWindow(QWidget):
         )
 
         logger.debug("SettingsWindow：配置已加载到 UI")
+
+    def _toggle_key_visibility(self, checked: bool):
+        """切换 API Key 显示/隐藏"""
+        if checked:
+            self._ai_key_edit.setEchoMode(QLineEdit.EchoMode.Normal)
+            self._ai_key_toggle.setText("隐藏")
+        else:
+            self._ai_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+            self._ai_key_toggle.setText("显示")
+
+    def _on_test_ai(self):
+        """测试当前 AI 连接是否可用"""
+        import threading
+
+        base_url = self._ai_base_url_edit.text().strip()
+        api_key  = self._ai_key_edit.text().strip()
+        model    = self._ai_model_edit.text().strip() or "auto"
+
+        # 优先使用界面填写的值；为空时回落到环境变量
+        import os
+        base_url = base_url or os.getenv("AI_API_BASE_URL", "http://localhost:3001/v1")
+        api_key  = api_key  or os.getenv("AI_API_KEY", "")
+        model    = model    or os.getenv("AI_MODEL_NAME", "auto")
+
+        self._test_ai_btn.setEnabled(False)
+        self._test_ai_btn.setText("测试中…")
+
+        def _do_test():
+            try:
+                import httpx
+                payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "你好，请回复'测试成功'两个字"}],
+                    "max_tokens": 20,
+                    "stream": False,
+                }
+                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                resp = httpx.post(
+                    f"{base_url.rstrip('/')}/chat/completions",
+                    json=payload, headers=headers,
+                    timeout=12.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text = data["choices"][0]["message"]["content"].strip()
+                    return True, f"连接成功 ✅\n\nAI 回复：{text}"
+                else:
+                    return False, f"连接失败：HTTP {resp.status_code}\n{resp.text[:200]}"
+            except Exception as e:
+                return False, f"连接失败：{e}"
+
+        from PySide6.QtCore import QMetaObject, Q_ARG
+
+        def _worker():
+            ok, msg = _do_test()
+            self._test_result.emit(ok, msg)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    @Slot(bool, str)
+    def _on_test_ai_done(self, ok: bool, msg: str):
+        """测试结果回调（在主线程执行）"""
+        self._test_ai_btn.setEnabled(True)
+        self._test_ai_btn.setText("🔗  测试 AI 连接")
+        if ok:
+            QMessageBox.information(self, "AI 连接测试", msg)
+        else:
+            QMessageBox.warning(self, "AI 连接测试", msg)
 
     def _on_save(self):
         """读取当前控件值，合并回原始 JSON 并写入文件"""
@@ -477,9 +610,13 @@ class SettingsWindow(QWidget):
             raw["screenshot"] = {}
         raw["screenshot"]["save_dir"] = self._screenshot_dir_edit.text().strip()
 
-        # AI 缓存开关
+        # AI 配置（完整写入）
         if "ai" not in raw:
             raw["ai"] = {}
+        raw["ai"]["provider"]        = self._ai_provider_box.currentText()
+        raw["ai"]["base_url"]        = self._ai_base_url_edit.text().strip()
+        raw["ai"]["api_key"]         = self._ai_key_edit.text().strip()
+        raw["ai"]["model"]           = self._ai_model_edit.text().strip()
         raw["ai"]["enable_ai_cache"] = self._ai_cache_check.isChecked()
 
         # 快捷应用
@@ -497,13 +634,15 @@ class SettingsWindow(QWidget):
             _save_raw_config(raw)
             logger.info("SettingsWindow：配置已保存到 config.json")
             QMessageBox.information(
-                self, "保存成功",
-                "设置已保存，部分配置重启后生效。"
+                self, "✅ 保存成功",
+                "设置已保存到 config.json。\n\n"
+                "• AI Key / Base URL / Model 也可在 .env 中覆盖（优先级更高）\n"
+                "• 部分配置（如 AI 连接）重启后生效"
             )
         except Exception as e:
             logger.error(f"SettingsWindow：保存 config.json 失败：{e}")
             QMessageBox.critical(
-                self, "保存失败",
+                self, "❌ 保存失败",
                 f"写入配置文件失败：\n{e}\n\n请检查文件权限或磁盘空间。"
             )
 
@@ -577,6 +716,16 @@ QComboBox QAbstractItemView {
     border-radius: 8px;
 }
 #ResetButton:hover { background-color: #585b70; }
+#TestAIButton {
+    background-color: #313244;
+    color: #a6e3a1;
+    border: 1px solid #a6e3a1;
+    border-radius: 8px;
+    padding: 0 12px;
+}
+#TestAIButton:hover  { background-color: #3d4058; }
+#TestAIButton:pressed{ background-color: #282a36; }
+#TestAIButton:disabled { color: #6c7086; border-color: #6c7086; }
 QScrollBar:vertical {
     background: #1e1e2e; width: 6px; border-radius: 3px;
 }
@@ -653,6 +802,16 @@ QComboBox QAbstractItemView {
     border-radius: 8px;
 }
 #ResetButton:hover { background-color: #bcc0cc; }
+#TestAIButton {
+    background-color: #e6e9ef;
+    color: #179299;
+    border: 1px solid #179299;
+    border-radius: 8px;
+    padding: 0 12px;
+}
+#TestAIButton:hover  { background-color: #dce0e8; }
+#TestAIButton:pressed{ background-color: #ccd0da; }
+#TestAIButton:disabled { color: #9ca0b0; border-color: #9ca0b0; }
 QScrollBar:vertical {
     background: #eff1f5; width: 6px; border-radius: 3px;
 }

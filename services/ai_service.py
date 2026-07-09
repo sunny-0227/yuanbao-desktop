@@ -2,12 +2,22 @@
 AI 问答服务
 使用 httpx 调用兼容 OpenAI Chat Completions 格式的大模型 API。
 
+默认对接 FreeLLMAPI（本地 OpenAI-compatible 代理）：
+  AI_API_BASE_URL=http://localhost:3001/v1
+  AI_API_KEY=freellmapi-你的统一key
+  AI_MODEL_NAME=auto
+
+同时兼容任何 OpenAI-compatible 服务：
+  - OpenAI 官方（https://api.openai.com/v1）
+  - DeepSeek（https://api.deepseek.com/v1）
+  - 本地 Ollama（http://localhost:11434/v1）
+
 设计原则：
-- API 配置优先从环境变量读取（.env），其次从 AIConfig 对象读取
-- 提供 ask_ai(user_text) 简单接口，屏蔽底层 HTTP 细节
-- 未配置 API Key 时返回友好提示，不抛异常
-- 请求超时 30 秒；网络/API 异常全部捕获并返回友好字符串
-- API Key 不写死在代码里，全部来自环境变量或 config 注入
+- 配置优先级：.env 环境变量 > config.json > 代码默认值
+- is_configured() 供外部检查能否发请求（Key 非空即视为已配置）
+- ask_ai() 永不抛异常，所有错误均返回用户可读的中文字符串
+- httpx 延迟导入：未安装时启动不崩溃，调用时给出安装提示
+- 不在代码中硬编码任何 API Key
 """
 
 import os
@@ -28,16 +38,19 @@ _DEFAULT_SYSTEM_PROMPT = (
 # 请求超时时间（秒）
 _TIMEOUT_SECONDS = 30
 
+# FreeLLMAPI 默认接入地址（.env 中 AI_API_BASE_URL 可覆盖）
+_DEFAULT_BASE_URL = "http://localhost:3001/v1"
+
 
 class AIService:
     """
     AI 问答服务（httpx 实现，兼容 OpenAI Chat Completions 接口）。
 
-    支持所有兼容 OpenAI 接口的服务商：
-      - OpenAI（gpt-4o / gpt-4o-mini）
-      - DeepSeek（deepseek-chat）
-      - 本地 Ollama（http://localhost:11434/v1）
-      - 任何兼容接口（通过 base_url 指定）
+    默认对接本地 FreeLLMAPI，也支持所有兼容 OpenAI 格式的服务商。
+    通过 .env 配置三个环境变量即可切换后端：
+        AI_API_BASE_URL   接口根地址（含 /v1）
+        AI_API_KEY        服务 unified key
+        AI_MODEL_NAME     模型名，填 auto 由代理自动选择
 
     使用方式：
         svc = AIService(config=app_config.ai)
@@ -46,21 +59,24 @@ class AIService:
 
     def __init__(self, config: Optional[AIConfig] = None):
         self._config = config or AIConfig()
-        # 环境变量优先级高于 config 文件
-        self._api_key  = os.getenv("AI_API_KEY")  or self._config.api_key
+
+        # 环境变量优先级 > config.json > 代码默认值
+        self._api_key = (
+            os.getenv("AI_API_KEY") or
+            self._config.api_key
+        )
         self._base_url = (
             os.getenv("AI_API_BASE_URL") or
             os.getenv("AI_BASE_URL")     or
             self._config.base_url        or
-            "https://api.openai.com/v1"
+            _DEFAULT_BASE_URL
         )
         self._model = (
             os.getenv("AI_MODEL_NAME") or
             os.getenv("AI_MODEL")      or
             self._config.model         or
-            "gpt-4o-mini"
+            "auto"
         )
-        # 使用 AIConfig 中的 system_prompt，若与默认相同则无需覆盖
         self._system_prompt = self._config.system_prompt or _DEFAULT_SYSTEM_PROMPT
 
     # ── 公开接口 ──────────────────────────────────────────────
@@ -74,18 +90,19 @@ class AIService:
             user_text: 用户输入的原始文本
 
         返回：
-            AI 回复字符串；失败时返回友好提示
+            AI 回复字符串；失败时返回用户可读的中文提示
         """
-        # 未配置 API Key 时直接返回提示
         if not self._api_key:
             logger.warning("AI API Key 未配置")
-            return "当前未配置 AI API，请在 .env 中填写模型配置。"
+            return (
+                "当前未配置 FreeLLMAPI unified key，"
+                "请在 .env 中填写 AI_API_KEY=freellmapi-你的统一key"
+            )
 
         messages = [
             {"role": "system", "content": self._system_prompt},
             {"role": "user",   "content": user_text},
         ]
-
         return self._do_request(messages)
 
     def is_configured(self) -> bool:
@@ -99,14 +116,17 @@ class AIService:
         实际发起 HTTP 请求。
         使用 httpx 同步客户端，超时 30 秒。
         所有异常均在此处捕获并转换为友好字符串。
+
+        注意：此方法在 LocalCommandExecutor._ExecuteThread 中被调用，
+        始终运行于后台线程，不会阻塞 PySide6 UI 主线程。
         """
         try:
-            import httpx  # 延迟导入，避免未安装时启动崩溃
+            import httpx
         except ImportError:
             logger.error("未安装 httpx，无法调用 AI")
             return "AI 功能需要安装 httpx，请运行：pip install httpx"
 
-        # 拼接请求 URL（去掉末尾斜杠后加路径）
+        # 去掉末尾斜杠，拼接标准路径
         base = self._base_url.rstrip("/")
         url  = f"{base}/chat/completions"
 
@@ -115,7 +135,7 @@ class AIService:
             "Content-Type":  "application/json",
         }
         payload = {
-            "model":       self._model,
+            "model":       self._model,       # "auto" 直接透传，由代理处理
             "messages":    messages,
             "temperature": self._config.temperature,
             "max_tokens":  self._config.max_tokens,
@@ -127,30 +147,41 @@ class AIService:
             with httpx.Client(timeout=_TIMEOUT_SECONDS) as client:
                 resp = client.post(url, headers=headers, json=payload)
 
-            # 处理 HTTP 错误状态码
+            # ── 处理 HTTP 错误状态码 ────────────────────────────
             if resp.status_code == 401:
-                logger.error("AI API Key 无效或已过期（401）")
-                return "⚠️ AI API Key 无效，请检查 .env 中的配置。"
+                logger.error("FreeLLMAPI unified key 无效（401）")
+                return (
+                    "⚠️ FreeLLMAPI unified key 无效，"
+                    "请检查 Keys 页面复制的 key 是否完整填入 .env。"
+                )
             if resp.status_code == 429:
-                logger.warning("AI API 请求频率超限（429）")
-                return "⚠️ 请求太频繁，请稍后再试。"
+                logger.warning("FreeLLMAPI 额度受限（429）")
+                return (
+                    "⚠️ 当前免费模型额度可能暂时受限，"
+                    "请稍后重试或检查 fallback chain 配置。"
+                )
             if resp.status_code >= 500:
-                logger.error(f"AI 服务端错误：{resp.status_code}")
-                return f"⚠️ AI 服务暂时不可用（{resp.status_code}），请稍后再试。"
+                logger.error(f"FreeLLMAPI 服务端错误：{resp.status_code}")
+                return f"⚠️ FreeLLMAPI 服务暂时不可用（{resp.status_code}），请稍后再试。"
 
             resp.raise_for_status()
 
-            data   = resp.json()
-            reply  = data["choices"][0]["message"]["content"]
+            data  = resp.json()
+            reply = data["choices"][0]["message"]["content"]
             logger.debug(f"AI 回复长度：{len(reply)} 字符")
             return reply.strip()
 
+        except httpx.ConnectError:
+            # 最常见：FreeLLMAPI 未启动或端口不对
+            host = self._base_url.split("/v1")[0] if "/v1" in self._base_url else self._base_url
+            logger.error(f"无法连接 FreeLLMAPI（ConnectError）：{self._base_url}")
+            return (
+                f"当前无法连接本地 FreeLLMAPI 服务，"
+                f"请确认 {host} 已启动。"
+            )
         except httpx.TimeoutException:
             logger.error("AI 请求超时（>30s）")
-            return "⚠️ AI 响应超时，请稍后再试。"
-        except httpx.ConnectError:
-            logger.error("AI API 连接失败（网络不可达）")
-            return "⚠️ 无法连接 AI 服务，请检查网络或 API 地址配置。"
+            return "⚠️ AI 响应超时（>30s），请检查 FreeLLMAPI 服务是否正常运行。"
         except (KeyError, IndexError, ValueError) as e:
             logger.error(f"AI 响应解析失败：{e}")
             return "⚠️ AI 返回了无法解析的数据，请稍后重试。"

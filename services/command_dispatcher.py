@@ -1,14 +1,13 @@
 """
 指令分发器
-负责把 CommandRouter 识别出的 action 分发给对应的 Service 执行，
+根据 CommandRouter 识别出的 type / action，分发给对应 Service 执行，
 并将执行结果（字符串）返回给聊天窗口展示。
 
-职责：
-- 持有各 Service 实例
-- 根据 CommandResult.action 调用对应执行方法
-- 未识别的 action 返回通用提示，不崩溃
+与 CommandRouter 的职责分工：
+    CommandRouter  — 纯意图识别，返回 CommandResult（不执行任何 IO）
+    CommandDispatcher — 纯执行调度，不做意图识别
 
-新增 Service 时：在 __init__ 中注册，在 _dispatch_local 添加分支即可。
+新增 Service 时：在 __init__ 中注册，在 _dispatch() 增加对应 type 分支即可。
 """
 
 from services.command_router import CommandRouter, CommandResult
@@ -19,6 +18,7 @@ from services.screenshot_service import ScreenshotService
 from services.monitor_service import MonitorService
 from services.system_service import VolumeService, SystemCommandService
 from services.todo_service import TodoService
+from services.date_time_service import DateTimeService
 from app.config import AppConfig
 from app.logger import setup_logger
 from typing import Optional
@@ -30,16 +30,16 @@ _NOT_IMPLEMENTED_MSG = "该功能正在开发中，敬请期待。"
 
 class CommandDispatcher:
     """
-    统一指令入口。
+    统一指令分发入口。
 
     使用方式：
         dispatcher = CommandDispatcher(config=app_config)
-        reply = dispatcher.handle("打开记事本")
-        # 非空字符串 → 本地指令执行结果（直接展示）
-        # 空字符串   → 未命中本地规则，交给 AI
+        reply = dispatcher.handle("今天周几")
+        # 非空字符串 → 本地处理结果
+        # 空字符串   → 未命中本地规则，由 LocalCommandExecutor 转交 AI
 
     可通过 todo_service 参数注入外部 TodoService 实例，
-    实现与 main.py 定时弹窗逻辑共用同一数据对象。
+    与 main.py 定时弹窗逻辑共用同一数据对象。
     """
 
     def __init__(
@@ -59,109 +59,148 @@ class CommandDispatcher:
         self._monitor_svc    = MonitorService()
         self._volume_svc     = VolumeService()
         self._syscmd_svc     = SystemCommandService()
-        # 优先使用外部注入的实例；未注入时自建，保持向后兼容
+        self._datetime_svc   = DateTimeService()
         self._todo_svc       = todo_service if todo_service is not None else TodoService()
+
+    # ── 公开接口 ──────────────────────────────────────────────
 
     def handle(self, text: str) -> str:
         """
-        接收用户原始输入，返回回复字符串。
-        返回空字符串表示"未命中本地规则，请调用 AI"。
+        接收用户原始输入，返回执行结果字符串。
+        返回空字符串 → 交给 AI。
         """
-        result: CommandResult = self._router.route(text)
+        try:
+            result: CommandResult = self._router.route(text)
+        except Exception as e:
+            logger.error(f"CommandRouter 意图识别异常：{e}")
+            return ""   # 识别失败时降级到 AI
 
-        if result.handled:
-            return self._dispatch_local(result, raw_text=text)
+        if not result.handled:
+            return ""   # ai_chat，由 LocalCommandExecutor 调用 AI
 
-        return ""
+        try:
+            return self._dispatch(result, raw_text=text)
+        except Exception as e:
+            logger.error(f"指令分发执行异常：type={result.type}  action={result.action}  {e}")
+            return f"⚠️ 执行出错：{e}"
 
-    def _dispatch_local(self, result: CommandResult, raw_text: str = "") -> str:
-        """根据 action 分发到对应 Service，返回执行结果字符串"""
+    # ── 内部分发 ──────────────────────────────────────────────
+
+    def _dispatch(self, result: CommandResult, raw_text: str = "") -> str:
+        """根据 type / action 路由到对应 Service"""
+        t      = result.type
         action = result.action or ""
         data   = result.data or {}
 
-        # ── quick_app ────────────────────────────────────────
-        _app_name_map = {
-            "open_wechat":      "微信",
-            "open_browser":     None,       # 浏览器特殊处理
-            "open_word":        "Word",
-            "open_excel":       "Excel",
-            "open_calculator":  "计算器",
-            "open_notepad":     "记事本",
-        }
-        if action in _app_name_map:
-            if action == "open_browser":
-                return self._app_cmd.open_browser(data.get("url", ""))
-            return self._app_cmd.open_app(_app_name_map[action])
+        # ── 日期时间（本地，零延迟）────────────────────────────
+        if t == "date_time":
+            return self._datetime_svc.query(action)
 
-        # ── quick_folder ─────────────────────────────────────
-        _folder_name_map = {
-            "open_folder_desktop":     "桌面",
-            "open_folder_downloads":   "下载",
-            "open_folder_documents":   "文档",
-            "open_folder_pictures":    "图片",
-            "open_folder_projects":    "项目",
-            "open_folder_screenshots": "截图",
-        }
-        if action in _folder_name_map:
-            return self._app_cmd.open_folder(_folder_name_map[action])
+        # ── 截图 ────────────────────────────────────────────────
+        if t == "screenshot":
+            return self._screenshot_svc.take_screenshot()
 
-        # ── web_search ───────────────────────────────────────
-        if action == "web_search":
+        # ── 系统控制 ────────────────────────────────────────────
+        if t == "system_control":
+            return self._handle_system_control(action, data)
+
+        # ── 系统状态 ────────────────────────────────────────────
+        if t == "system_status":
+            return self._handle_system_status(action)
+
+        # ── 打开应用 / 文件夹 ────────────────────────────────────
+        if t == "quick_open":
+            return self._handle_quick_open(action, data)
+
+        # ── 网页搜索 ────────────────────────────────────────────
+        if t == "web_search":
             query  = data.get("query", "")
             engine = data.get("engine", "")
             return self._search_svc.search_web(query, engine=engine)
 
-        # ── quick_note ───────────────────────────────────────
+        # ── 待办提醒 ────────────────────────────────────────────
+        if t == "todo":
+            return self._handle_todo(action, data, raw_text)
+
+        # ── 快速笔记 ────────────────────────────────────────────
+        if t == "quick_note":
+            return self._handle_quick_note(action, data)
+
+        logger.warning(f"未知 type/action：type={t}  action={action}")
+        return _NOT_IMPLEMENTED_MSG
+
+    # ── 各类型处理器 ──────────────────────────────────────────
+
+    def _handle_system_control(self, action: str, data: dict) -> str:
+        if action == "mute":
+            return self._volume_svc.mute()
+        if action == "unmute":
+            return self._volume_svc.unmute()
+        if action == "volume_up":
+            step = data.get("amount", 10) / 100.0
+            return self._volume_svc.volume_up(step=step)
+        if action == "volume_down":
+            step = data.get("amount", 10) / 100.0
+            return self._volume_svc.volume_down(step=step)
+        if action == "lock_screen":
+            return self._syscmd_svc.lock_screen()
+        return _NOT_IMPLEMENTED_MSG
+
+    def _handle_system_status(self, action: str) -> str:
+        if action == "full_status":
+            return self._monitor_svc.check_all()
+        if action == "cpu_status":
+            return self._monitor_svc.check_cpu()
+        if action == "memory_status":
+            return self._monitor_svc.check_memory()
+        if action == "disk_status":
+            return self._monitor_svc.check_disk()
+        if action == "battery_status":
+            return self._monitor_svc.check_battery()
+        # 兜底：未细分则返回综合状态
+        return self._monitor_svc.check_all()
+
+    def _handle_quick_open(self, action: str, data: dict) -> str:
+        target = data.get("target_name", "")
+
+        if action == "open_folder":
+            return self._app_cmd.open_folder(target)
+
+        if action == "open_app":
+            # app_action 是规则文件中 app_aliases 对应的 action 字符串
+            app_action = data.get("app_action", "")
+            # 特殊：浏览器用专用方法（可带 URL）
+            if app_action == "open_browser":
+                return self._app_cmd.open_browser()
+            # 通用：把 target_name 当作应用名传入 open_app
+            return self._app_cmd.open_app(target)
+
+        # open_unknown：target 未在配置中，尝试直接当应用名
+        if action == "open_unknown" and target:
+            result = self._app_cmd.open_app(target)
+            if "暂未找到" in result:
+                result = self._app_cmd.open_folder(target)
+            return result
+
+        return f"暂未找到「{target}」，请在 config.json 中添加对应配置。"
+
+    def _handle_todo(self, action: str, data: dict, raw_text: str) -> str:
+        if action == "add_todo":
+            return self._todo_svc.add_todo_from_text(raw_text)
+        if action == "list_todo":
+            return self._todo_svc.list_todos()
+        if action == "delete_todo":
+            todo_id = data.get("todo_id")
+            if todo_id is None:
+                return "⚠️ 请告诉我要删除第几条提醒，例如：删除提醒 1"
+            return self._todo_svc.delete_todo(int(todo_id))
+        return _NOT_IMPLEMENTED_MSG
+
+    def _handle_quick_note(self, action: str, data: dict) -> str:
         if action == "add_note":
             return self._note_svc.add_note(data.get("content", ""))
         if action == "list_notes":
             return self._note_svc.list_notes()
         if action == "clear_notes":
             return self._note_svc.clear_notes()
-
-        # ── screenshot ───────────────────────────────────────
-        if action == "screenshot":
-            return self._screenshot_svc.take_screenshot()
-
-        # ── todo / reminder ──────────────────────────────────
-        if action == "add_reminder":
-            # 将原始输入文本传给 TodoService，由它完整解析时间和标题
-            return self._todo_svc.add_todo_from_text(raw_text)
-        if action == "list_reminders":
-            return self._todo_svc.list_todos()
-        if action == "delete_reminder":
-            # CommandRouter 提取的序号字段名为 "index"
-            rid = data.get("index") or data.get("id")
-            if rid is None:
-                return "⚠️ 请告诉我要删除第几条提醒，例如：删除提醒 1"
-            return self._todo_svc.delete_todo(int(rid))
-
-        # ── system_status（辅助功能）─────────────────────────
-        if action == "system_status_all":
-            return self._monitor_svc.check_all()
-        if action == "check_cpu":
-            return self._monitor_svc.check_cpu()
-        if action == "check_memory":
-            return self._monitor_svc.check_memory()
-        if action == "check_disk":
-            return self._monitor_svc.check_disk()
-        if action == "check_battery":
-            return self._monitor_svc.check_battery()
-
-        # ── system_control ───────────────────────────────────
-        if action == "lock_screen":
-            return self._syscmd_svc.lock_screen()
-        if action == "mute":
-            return self._volume_svc.mute()
-        if action == "unmute":
-            return self._volume_svc.unmute()
-        if action == "volume_up":
-            # amount 来自 CommandRouter 提取的百分比整数（如 20），转为 0~1 小数
-            step = data.get("amount", 10) / 100.0
-            return self._volume_svc.volume_up(step=step)
-        if action == "volume_down":
-            step = data.get("amount", 10) / 100.0
-            return self._volume_svc.volume_down(step=step)
-
-        logger.warning(f"未知 action：{action}")
         return _NOT_IMPLEMENTED_MSG

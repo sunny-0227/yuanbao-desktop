@@ -1,18 +1,18 @@
 """
-本地指令执行器
-在后台 QThread 中执行本地指令（CommandDispatcher.handle），
-通过 Qt 信号将结果异步返回给 UI，避免阻塞主线程。
+本地指令执行器（含任务取消支持）
 
-设计要点：
-- 持有 CommandDispatcher 引用，构造时完成所有 Service 初始化
-- execute(text) 启动 QThread，执行完成后 emit result_ready 或 error_occurred
-- 内置 AIService + CacheService：未命中本地规则时自动调用 AI，并读写缓存
-- 通过 connect_ai_start 让 UI 感知当前请求类型
-- 外部仍可通过 set_ai_handler() 注入自定义 AI 函数覆盖内置实现
-- UI 层（ChatWindow）只需连接信号，不直接调用 Service
+线程安全设计：
+- _ExecuteThread 完成后先触发 _on_thread_finished 将 Python 引用置 None，
+  再由 Qt 调用 deleteLater 析构 C++ 对象，避免 RuntimeError。
+- _is_thread_running() 用 try/except RuntimeError 防崩溃。
+- execute() 携带 task_id，所有回调均透传 task_id，
+  ChatWindow 据此过滤"已被取消的旧任务"的结果。
+- cancel_current_task() 通过 requestInterruption() 通知线程尽量提前退出，
+  并设置 cancel flag；即使线程无法立即中断（如 AI 请求），
+  旧 task_id 的结果回调也会被 ChatWindow 丢弃。
 """
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, QObject
 
 from services.command_dispatcher import CommandDispatcher
 from services.todo_service import TodoService
@@ -28,51 +28,65 @@ logger = setup_logger()
 class _ExecuteThread(QThread):
     """
     单次指令执行线程。
-    执行完成后通过信号通知结果，线程用完即销毁。
-    同时通过 is_ai_request 标志告诉 UI 本次是否走了 AI 流程。
+    携带 task_id，所有信号均透传 task_id，供 ChatWindow 过滤旧任务结果。
     """
-    result_ready   = Signal(str)   # 正常结果文本
-    error_occurred = Signal(str)   # 执行异常文本
-    ai_started     = Signal()      # 确认进入 AI 流程时触发（用于 UI 更新 loading 提示）
+    # (task_id, reply)
+    result_ready   = Signal(str, str)
+    # (task_id, error_msg)
+    error_occurred = Signal(str, str)
+    # (task_id)
+    ai_started     = Signal(str)
 
     def __init__(
         self,
         dispatcher: CommandDispatcher,
         text: str,
+        task_id: str,
         ai_handler=None,
-        parent=None,
+        parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
         self._dispatcher = dispatcher
         self._text       = text
-        self._ai_handler = ai_handler   # 最终 AI 调用函数（已含缓存逻辑）
+        self._task_id    = task_id
+        self._ai_handler = ai_handler
 
     def run(self):
         try:
+            # 执行前检查是否已被取消
+            if self.isInterruptionRequested():
+                return
+
             reply = self._dispatcher.handle(self._text)
 
+            if self.isInterruptionRequested():
+                return
+
             if reply:
-                # 本地指令命中，直接返回执行结果
-                self.result_ready.emit(reply)
+                # 本地指令命中，直接返回
+                self.result_ready.emit(self._task_id, reply)
             else:
                 # 未命中本地规则 → AI 流程
-                # 通知 UI 切换为 AI loading 状态（从后台线程 emit 是安全的）
-                self.ai_started.emit()
-                self.result_ready.emit(self._call_ai(self._text))
+                self.ai_started.emit(self._task_id)
+
+                if self.isInterruptionRequested():
+                    return
+
+                self.result_ready.emit(self._task_id, self._call_ai(self._text))
 
         except Exception as e:
             logger.error(f"指令执行线程异常：{e}")
-            self.error_occurred.emit(f"⚠️ 执行出错：{e}")
+            if not self.isInterruptionRequested():
+                self.error_occurred.emit(self._task_id, f"⚠️ 执行出错：{e}")
 
     def _call_ai(self, text: str) -> str:
-        """调用 AI handler（已在 LocalCommandExecutor 中封装缓存逻辑）"""
+        """调用 AI handler（含缓存逻辑）"""
         if self._ai_handler:
             try:
                 return self._ai_handler(text)
             except Exception as e:
                 logger.error(f"AI handler 异常：{e}")
                 return f"⚠️ AI 服务出错：{e}"
-        # 兜底：Executor 总会设置 handler，不应到达此处
         return "当前未配置 AI 服务，请在 .env 中填写模型配置。"
 
 
@@ -80,31 +94,15 @@ class LocalCommandExecutor:
     """
     本地指令异步执行入口。
 
-    ChatWindow 持有此对象，调用 execute() 后等待信号回调。
-    每次 execute() 创建新线程，线程执行完毕后自动清理。
+    核心机制：
+        execute(text, task_id)   — 创建线程执行指令，携带 task_id
+        cancel_current_task()    — 取消当前任务（逻辑取消 + 尽量中断线程）
 
-    内置 AI 调用流程（先查缓存，再请求，最后写缓存）：
-        用户输入 → CommandDispatcher（本地规则）
-                                    ↓ 未命中
-                       CacheService.get_cached_answer()
-                                    ↓ 未命中
-                          AIService.ask_ai()
-                                    ↓
-                       CacheService.save_answer()
-                                    ↓
-                          返回给 ChatWindow
-
-    信号说明：
-        connect_result(cb)      → 收到最终回复时回调
-        connect_error(cb)       → 执行出错时回调
-        connect_ai_start(cb)    → 确认进入 AI 流程时回调（UI 可据此更新 loading 文案）
-
-    使用方式：
-        executor = LocalCommandExecutor(config=app_config)
-        executor.connect_result(chat_window._on_reply)
-        executor.connect_error(chat_window._on_error)
-        executor.connect_ai_start(chat_window._on_ai_start)
-        executor.execute("帮我写一封请假邮件")
+    回调签名均带 task_id，ChatWindow 可据此过滤已取消任务的旧结果：
+        on_result(task_id, reply)
+        on_error(task_id, error_msg)
+        on_ai_start(task_id)
+        on_finished(task_id)      — 线程结束时触发（无论成功/失败/取消）
     """
 
     def __init__(
@@ -112,129 +110,158 @@ class LocalCommandExecutor:
         config: Optional[AppConfig] = None,
         todo_service: Optional[TodoService] = None,
     ):
-        # 将外部注入的 TodoService 传给 Dispatcher，保证全局唯一实例
         self._dispatcher = CommandDispatcher(config=config, todo_service=todo_service)
 
-        # 内置 AI 服务（httpx 实现，兼容 OpenAI 接口）
         ai_cfg = config.ai if config else None
         self._ai_svc = AIService(config=ai_cfg)
 
-        # 内置缓存服务（enable_ai_cache 来自 config）
         cache_enabled = config.ai.enable_ai_cache if (config and config.ai) else True
         self._cache_svc = CacheService(enable=cache_enabled)
 
-        # 构建内置 AI handler（含缓存逻辑），外部可通过 set_ai_handler 覆盖
         self._ai_handler = self._make_ai_handler()
 
+        # 当前线程引用，None 表示空闲
         self._thread: Optional[_ExecuteThread] = None
-        # 用 list 存回调，手动实现 signal-like 行为
-        # （LocalCommandExecutor 不继承 QObject，无法直接声明 Signal）
+
+        # 各类型回调列表
         self._result_cbs:   list = []
         self._error_cbs:    list = []
-        self._ai_start_cbs: list = []   # AI 流程开始时的回调
+        self._ai_start_cbs: list = []
+        self._finished_cbs: list = []
 
     # ── 公开接口 ──────────────────────────────────────────────
 
     def connect_result(self, callback):
-        """注册结果回调，签名：callback(reply: str)"""
+        """注册结果回调，签名：callback(task_id: str, reply: str)"""
         if callback not in self._result_cbs:
             self._result_cbs.append(callback)
 
     def connect_error(self, callback):
-        """注册错误回调，签名：callback(error_msg: str)"""
+        """注册错误回调，签名：callback(task_id: str, error_msg: str)"""
         if callback not in self._error_cbs:
             self._error_cbs.append(callback)
 
     def connect_ai_start(self, callback):
-        """
-        注册"AI 流程开始"回调，无参数。
-        在确认本次请求需要调用 AI（本地规则未命中）后触发，
-        供 ChatWindow 把 loading 文案从"执行中…"更新为"思考中…"。
-        """
+        """注册 AI 开始回调，签名：callback(task_id: str)"""
         if callback not in self._ai_start_cbs:
             self._ai_start_cbs.append(callback)
 
+    def connect_finished(self, callback):
+        """注册线程结束回调，签名：callback(task_id: str)"""
+        if callback not in self._finished_cbs:
+            self._finished_cbs.append(callback)
+
     def set_ai_handler(self, handler):
-        """
-        注入自定义 AI 调用函数，签名：handler(text: str) -> str。
-        覆盖内置的 AIService + CacheService 逻辑。
-        """
+        """注入自定义 AI 函数，签名：handler(text: str) -> str"""
         self._ai_handler = handler
 
     @property
     def ai_configured(self) -> bool:
-        """返回 AI 是否已配置（用于 ChatWindow 显示欢迎提示）"""
         return self._ai_svc.is_configured()
 
-    def execute(self, text: str) -> None:
+    def execute(self, text: str, task_id: str) -> None:
         """
-        在后台线程中执行指令，结果通过回调通知。
-        若上一个线程还在运行，等待其完成后再启动（防止并发冲突）。
+        在后台线程中执行指令。
+        若上一个线程仍在运行，直接返回忙碌提示，不创建新线程。
+        调用方（ChatWindow）应在调用前先调用 cancel_current_task()。
         """
-        # 等待上一个线程完成（最多等 5 秒，超时强制终止）
-        if self._thread and self._thread.isRunning():
-            if not self._thread.wait(5000):
-                logger.warning("上一个指令线程超时，强制终止")
-                self._thread.terminate()
+        if self._is_thread_running():
+            logger.warning("上一个指令线程仍在运行，拒绝重复提交")
+            self._on_result(task_id, "当前任务正在执行，请先点击「停止」。")
+            return
 
-        thread = _ExecuteThread(self._dispatcher, text, self._ai_handler)
+        thread = _ExecuteThread(
+            self._dispatcher, text, task_id, self._ai_handler
+        )
+
+        # 信号按顺序连接：Python 侧清理在 deleteLater 之前
         thread.result_ready.connect(self._on_result)
         thread.error_occurred.connect(self._on_error)
         thread.ai_started.connect(self._on_ai_started)
+        thread.finished.connect(lambda: self._on_thread_finished(task_id))
         thread.finished.connect(thread.deleteLater)
+
         self._thread = thread
         thread.start()
+        logger.debug(f"线程已启动，task_id={task_id}")
+
+    def cancel_current_task(self) -> bool:
+        """
+        取消当前任务。
+        - 通过 requestInterruption() 通知线程尽量提前退出
+        - 对于 AI 同步请求无法真正中断，但 ChatWindow 侧通过 task_id 过滤旧结果
+
+        返回 True 表示确实有任务在运行并已发出取消请求。
+        """
+        if not self._is_thread_running():
+            return False
+        try:
+            self._thread.requestInterruption()
+            logger.info("已发送线程中断请求")
+        except RuntimeError:
+            self._thread = None
+        return True
 
     # ── 私有方法 ──────────────────────────────────────────────
 
+    def _is_thread_running(self) -> bool:
+        """安全判断线程是否仍在运行，捕获 C++ 对象已删除异常"""
+        if self._thread is None:
+            return False
+        try:
+            return self._thread.isRunning()
+        except RuntimeError:
+            logger.debug("_ExecuteThread C++ 对象已删除，清理引用")
+            self._thread = None
+            return False
+
+    def _on_thread_finished(self, task_id: str):
+        """
+        线程结束时：先置 None（必须在 deleteLater 前执行），
+        再通知外部 finished 回调。
+        """
+        self._thread = None
+        logger.debug(f"线程已结束，task_id={task_id}")
+        for cb in list(self._finished_cbs):
+            try:
+                cb(task_id)
+            except Exception as e:
+                logger.error(f"finished 回调异常：{e}")
+
     def _make_ai_handler(self):
-        """
-        构建含缓存逻辑的 AI handler 闭包：
-          1. 先查缓存
-          2. 缓存未命中则调用 AIService.ask_ai()
-          3. 将有效回答写入缓存（错误提示不缓存）
-        """
+        """构建含缓存逻辑的 AI handler 闭包"""
         ai_svc    = self._ai_svc
         cache_svc = self._cache_svc
 
         def _handler(text: str) -> str:
-            # 步骤一：查缓存
             cached = cache_svc.get_cached_answer(text)
             if cached:
                 logger.debug("使用缓存回复")
                 return cached
-
-            # 步骤二：调用 AI（所有异常在 ask_ai 内部捕获，不会抛出）
             answer = ai_svc.ask_ai(text)
-
-            # 步骤三：仅当回答有效时才写缓存（错误提示不缓存）
             if answer and not answer.startswith("⚠️") and not answer.startswith("当前未配置"):
                 cache_svc.save_answer(text, answer)
-
             return answer
 
         return _handler
 
-    def _on_result(self, reply: str):
-        """线程 result_ready 信号 → 转发给所有注册回调"""
+    def _on_result(self, task_id: str, reply: str):
         for cb in list(self._result_cbs):
             try:
-                cb(reply)
+                cb(task_id, reply)
             except Exception as e:
                 logger.error(f"result 回调异常：{e}")
 
-    def _on_error(self, msg: str):
-        """线程 error_occurred 信号 → 转发给所有注册回调"""
+    def _on_error(self, task_id: str, msg: str):
         for cb in list(self._error_cbs):
             try:
-                cb(msg)
+                cb(task_id, msg)
             except Exception as e:
                 logger.error(f"error 回调异常：{e}")
 
-    def _on_ai_started(self):
-        """线程 ai_started 信号 → 通知 UI 进入 AI 等待状态"""
+    def _on_ai_started(self, task_id: str):
         for cb in list(self._ai_start_cbs):
             try:
-                cb()
+                cb(task_id)
             except Exception as e:
                 logger.error(f"ai_start 回调异常：{e}")

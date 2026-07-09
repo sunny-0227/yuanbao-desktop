@@ -1,134 +1,183 @@
 {
-  "_comment": "本地指令规则配置（日常办公效率场景）。每条规则字段：action（动作标识）、type（分类）、keywords（触发关键词）、description（说明）。只需在此文件增减条目即可扩展指令，无需改代码。",
+  "_comment": "本地意图识别规则配置。CommandRouter 从此文件加载规则，不依赖代码里的硬编码白名单。",
 
-  "rules": [
+  "date_time": {
+    "_comment": "日期时间意图：包含时间关键词 + 查询动作词，且无 AI 创作意图",
+    "time_keywords": [
+      "今天", "明天", "后天", "大后天",
+      "现在", "当前", "此刻",
+      "日期", "时间", "几点", "几号",
+      "星期", "周几", "礼拜"
+    ],
+    "query_verbs": [
+      "是", "几", "多少", "查", "看", "问", "告诉", "知道"
+    ],
+    "actions": [
+      {
+        "action": "current_weekday",
+        "patterns": ["今天周几", "今天星期几", "今天是周几", "今天是星期几",
+                     "今天礼拜几", "今天是礼拜几", "周几"]
+      },
+      {
+        "action": "current_time",
+        "patterns": ["现在几点", "现在时间", "当前时间", "几点了",
+                     "现在是几点", "现在是什么时间", "时间是多少", "几点钟"]
+      },
+      {
+        "action": "current_date",
+        "patterns": ["今天几号", "今天日期", "当前日期", "今天是几号",
+                     "今天是什么日期", "今天的日期", "几月几号", "今天是哪天"]
+      },
+      {
+        "action": "current_datetime",
+        "patterns": ["今天日期时间", "日期和时间", "现在日期时间"]
+      },
+      {
+        "action": "tomorrow_weekday",
+        "patterns": ["明天周几", "明天星期几", "明天是周几", "明天是星期几",
+                     "明天礼拜几", "明天是礼拜几"]
+      }
+    ]
+  },
 
-    { "action": "open_wechat",   "type": "quick_app",
-      "keywords": ["打开微信", "开微信", "打微信"],
-      "description": "打开微信" },
+  "quick_open": {
+    "_comment": "打开应用或文件夹：动作词 + 对象名",
+    "verbs": ["打开", "启动", "进入", "帮我打开", "帮我启动", "打开一下", "开一下", "起来"],
+    "app_aliases": {
+      "浏览器": "open_browser",
+      "chrome": "open_browser",
+      "edge": "open_browser",
+      "微信": "open_wechat",
+      "wechat": "open_wechat",
+      "word": "open_word",
+      "文档软件": "open_word",
+      "excel": "open_excel",
+      "表格软件": "open_excel",
+      "计算器": "open_calculator",
+      "calc": "open_calculator",
+      "记事本": "open_notepad",
+      "notepad": "open_notepad"
+    },
+    "folder_aliases": {
+      "桌面": "open_folder",
+      "desktop": "open_folder",
+      "下载": "open_folder",
+      "下载目录": "open_folder",
+      "下载文件夹": "open_folder",
+      "downloads": "open_folder",
+      "文档": "open_folder",
+      "我的文档": "open_folder",
+      "documents": "open_folder",
+      "图片": "open_folder",
+      "我的图片": "open_folder",
+      "pictures": "open_folder",
+      "截图": "open_folder",
+      "截图目录": "open_folder",
+      "截图文件夹": "open_folder",
+      "项目": "open_folder",
+      "项目目录": "open_folder"
+    }
+  },
 
-    { "action": "open_browser",  "type": "quick_app",
-      "keywords": ["打开浏览器", "开浏览器", "打浏览器", "上网"],
-      "description": "打开默认浏览器" },
+  "web_search": {
+    "_comment": "网页搜索：包含搜索动作词",
+    "verbs": [
+      "搜索", "搜一下", "查一下", "查找", "查询",
+      "百度一下", "百度搜索", "必应搜索", "必应一下",
+      "谷歌搜索", "谷歌一下", "bing搜索", "google搜索",
+      "帮我搜", "帮我查", "帮我找"
+    ]
+  },
 
-    { "action": "open_word",     "type": "quick_app",
-      "keywords": ["打开word", "打开Word", "开word", "开Word", "打开文档软件"],
-      "description": "打开 Microsoft Word" },
+  "quick_note": {
+    "_comment": "快速笔记",
+    "add_verbs": [
+      "记一下", "记下", "帮我记", "帮我记一下",
+      "记录", "记录一下", "备忘", "备注", "记个事"
+    ],
+    "list_keywords": [
+      "查看笔记", "看看笔记", "笔记列表", "我的笔记",
+      "显示笔记", "笔记有哪些", "笔记记了什么"
+    ],
+    "clear_keywords": [
+      "清空笔记", "删除全部笔记", "删掉所有笔记",
+      "清除笔记", "清空所有笔记"
+    ]
+  },
 
-    { "action": "open_excel",    "type": "quick_app",
-      "keywords": ["打开excel", "打开Excel", "开excel", "开Excel", "打开表格软件"],
-      "description": "打开 Microsoft Excel" },
+  "todo": {
+    "_comment": "待办提醒",
+    "add_verbs": [
+      "提醒我", "帮我提醒", "设个提醒", "添加提醒",
+      "定个提醒", "记个提醒", "提醒一下"
+    ],
+    "list_keywords": [
+      "查看提醒", "提醒列表", "我的提醒", "有哪些提醒",
+      "查看待办", "待办列表", "我的待办", "查看todo",
+      "查一下提醒", "有什么提醒"
+    ],
+    "delete_keywords": [
+      "删除提醒", "取消提醒", "移除提醒",
+      "删除待办", "取消待办", "移除待办"
+    ]
+  },
 
-    { "action": "open_calculator", "type": "quick_app",
-      "keywords": ["打开计算器", "开计算器", "计算器"],
-      "description": "打开系统计算器" },
+  "screenshot": {
+    "_comment": "截图",
+    "keywords": [
+      "截图", "截个图", "截一下屏", "保存截图",
+      "屏幕截图", "抓屏", "截屏", "截一张图"
+    ]
+  },
 
-    { "action": "open_notepad",  "type": "quick_app",
-      "keywords": ["打开记事本", "开记事本", "记事本"],
-      "description": "打开系统记事本" },
+  "system_status": {
+    "_comment": "系统状态查询",
+    "full_keywords": [
+      "查看电脑状态", "电脑状态", "系统状态", "电脑怎么样",
+      "电脑卡不卡", "查看系统资源", "资源占用"
+    ],
+    "cpu_keywords": [
+      "cpu", "处理器", "cpu使用", "cpu占用", "处理器使用"
+    ],
+    "memory_keywords": [
+      "内存", "内存使用", "内存占用", "ram", "内存多少"
+    ],
+    "disk_keywords": [
+      "硬盘", "磁盘", "存储空间", "硬盘使用", "磁盘空间"
+    ],
+    "battery_keywords": [
+      "电量", "电池", "剩余电量", "电池电量", "电量多少"
+    ],
+    "query_prefix": ["查看", "查询", "查一下", "看看", "检查"]
+  },
 
+  "system_control": {
+    "_comment": "系统控制（注意：不支持关机/重启，避免误触发）",
+    "mute_keywords": ["静音", "关闭声音", "关声音", "消音"],
+    "unmute_keywords": ["取消静音", "恢复声音", "打开声音", "取消消音"],
+    "volume_up_keywords": ["音量增加", "声音大一点", "调高音量", "音量加", "加大音量", "声音大些"],
+    "volume_down_keywords": ["音量降低", "声音小一点", "调低音量", "音量减", "降低音量", "声音小些"],
+    "lock_keywords": ["锁屏", "锁定屏幕", "锁定电脑", "锁一下屏"]
+  },
 
-    { "action": "open_folder_desktop",     "type": "quick_folder",
-      "keywords": ["打开桌面", "去桌面", "桌面文件夹"],
-      "description": "打开桌面文件夹" },
-
-    { "action": "open_folder_downloads",   "type": "quick_folder",
-      "keywords": ["打开下载", "下载文件夹", "打开下载目录"],
-      "description": "打开下载文件夹" },
-
-    { "action": "open_folder_documents",   "type": "quick_folder",
-      "keywords": ["打开文档", "文档文件夹", "打开我的文档"],
-      "description": "打开文档文件夹" },
-
-    { "action": "open_folder_pictures",    "type": "quick_folder",
-      "keywords": ["打开图片", "图片文件夹", "打开我的图片"],
-      "description": "打开图片文件夹" },
-
-    { "action": "open_folder_projects",    "type": "quick_folder",
-      "keywords": ["打开项目目录", "打开项目", "项目文件夹"],
-      "description": "打开项目目录" },
-
-    { "action": "open_folder_screenshots", "type": "quick_folder",
-      "keywords": ["打开截图目录", "截图文件夹", "查看截图"],
-      "description": "打开截图保存目录" },
-
-
-    { "action": "screenshot",    "type": "screenshot",
-      "keywords": ["截图", "截个图", "截一下屏", "保存截图", "抓屏"],
-      "description": "截图并保存到截图目录" },
-
-
-    { "action": "web_search",    "type": "web_search",
-      "keywords": ["搜索", "查一下", "帮我搜", "百度搜索", "必应搜索", "bing搜索", "谷歌搜索"],
-      "description": "在浏览器中打开搜索结果" },
-
-
-    { "action": "add_note",      "type": "quick_note",
-      "keywords": ["记一下", "帮我记一下", "记录一下", "记下来", "帮我记"],
-      "description": "添加一条快速笔记" },
-
-    { "action": "list_notes",    "type": "quick_note",
-      "keywords": ["查看笔记", "我的笔记", "笔记列表", "看看笔记"],
-      "description": "显示所有快速笔记" },
-
-    { "action": "clear_notes",   "type": "quick_note",
-      "keywords": ["清空笔记", "删除所有笔记", "清除笔记"],
-      "description": "清空所有快速笔记" },
-
-
-    { "action": "add_reminder",  "type": "todo",
-      "keywords": ["提醒我", "帮我提醒", "设个提醒", "添加提醒", "定个提醒"],
-      "description": "添加一条定时提醒" },
-
-    { "action": "list_reminders", "type": "todo",
-      "keywords": ["查看提醒", "我的提醒", "提醒列表", "有哪些提醒", "查看待办", "待办列表", "我的待办", "查看todo"],
-      "description": "查看所有提醒" },
-
-    { "action": "delete_reminder", "type": "todo",
-      "keywords": ["删除提醒", "取消提醒", "移除提醒", "删除待办", "取消待办", "移除待办"],
-      "description": "删除指定提醒" },
-
-
-    { "action": "system_status_all", "type": "system_status",
-      "keywords": ["查看电脑状态", "电脑状态", "系统状态", "电脑怎么样"],
-      "description": "综合查看 CPU/内存/磁盘状态" },
-
-    { "action": "check_cpu",     "type": "system_status",
-      "keywords": ["查看cpu", "cpu使用率", "cpu占用", "处理器使用"],
-      "description": "查询 CPU 使用率" },
-
-    { "action": "check_memory",  "type": "system_status",
-      "keywords": ["查看内存", "内存使用", "内存占用", "ram使用"],
-      "description": "查询内存使用情况" },
-
-    { "action": "check_disk",    "type": "system_status",
-      "keywords": ["查看硬盘", "硬盘使用", "磁盘使用", "存储空间", "查硬盘"],
-      "description": "查询磁盘使用情况" },
-
-    { "action": "check_battery", "type": "system_status",
-      "keywords": ["查看电量", "电池电量", "剩余电量", "电量多少"],
-      "description": "查询电池电量" },
-
-
-    { "action": "lock_screen",   "type": "system_control",
-      "keywords": ["锁屏", "锁定屏幕", "锁定电脑"],
-      "description": "锁定 Windows 屏幕" },
-
-    { "action": "mute",          "type": "system_control",
-      "keywords": ["静音", "关闭声音", "关声音"],
-      "description": "系统静音" },
-
-    { "action": "unmute",        "type": "system_control",
-      "keywords": ["取消静音", "恢复声音", "打开声音"],
-      "description": "取消系统静音" },
-
-    { "action": "volume_up",     "type": "system_control",
-      "keywords": ["音量增加", "声音大一点", "调高音量", "音量加"],
-      "description": "调高系统音量" },
-
-    { "action": "volume_down",   "type": "system_control",
-      "keywords": ["音量降低", "声音小一点", "调低音量", "音量减"],
-      "description": "调低系统音量" }
-
-  ]
+  "ai_chat_indicators": {
+    "_comment": "这些词出现时倾向于走 AI；但若同时有明确本地动作词，本地优先",
+    "strong": [
+      "写一段", "帮我写", "生成一段", "生成一个",
+      "总结一下", "帮我总结", "润色一下", "帮我润色",
+      "翻译一下", "帮我翻译", "翻译成",
+      "解释一下", "帮我解释", "解释这段",
+      "分析一下", "帮我分析",
+      "帮我想", "帮我想想", "给我出",
+      "评价一下", "可行性分析", "优缺点",
+      "写代码", "帮我写代码", "实现一个", "给我代码",
+      "写文案", "文案生成",
+      "为什么", "为何"
+    ],
+    "weak": [
+      "怎么做", "如何", "怎么",
+      "什么是", "是什么", "讲解", "介绍",
+      "好吗", "可以吗", "建议", "推荐"
+    ]
+  }
 }

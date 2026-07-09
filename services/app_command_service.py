@@ -146,13 +146,22 @@ class AppCommandService:
     def open_folder(self, folder_name: str) -> str:
         """
         按名称打开快捷文件夹。
+        支持别名匹配：用户输入的名称在 _folder_map 中的任意 name 包含即命中。
         路径支持 Windows 环境变量（%USERPROFILE% 等）。
+        截图目录不存在时自动创建；其他目录不存在时给出友好提示。
         """
         if not is_windows():
             return _NOT_WIN_MSG
 
-        key = folder_name.strip().lower()
+        key  = folder_name.strip().lower()
         item = self._folder_map.get(key)
+
+        # 若精确匹配失败，尝试包含匹配（支持别名）
+        if not item:
+            for map_key, map_item in self._folder_map.items():
+                if key in map_key or map_key in key:
+                    item = map_item
+                    break
 
         if not item:
             logger.debug(f"quick_folders 中未找到：{folder_name!r}")
@@ -173,11 +182,20 @@ class AppCommandService:
         path = _expand(raw_path)
 
         if not os.path.exists(path):
-            logger.warning(f"文件夹不存在：{path}")
-            return (
-                f"⚠️ 找不到文件夹「{display}」：{path}\n"
-                "请检查 config.json 中的路径是否正确。"
-            )
+            # 截图目录：不存在时自动创建
+            if "screenshot" in raw_path.lower() or "截图" in display:
+                try:
+                    os.makedirs(path, exist_ok=True)
+                    logger.info(f"截图目录已自动创建：{path}")
+                except Exception as e:
+                    logger.error(f"截图目录创建失败：{e}")
+                    return f"⚠️ 截图目录创建失败：{e}"
+            else:
+                logger.warning(f"文件夹不存在：{path}")
+                return (
+                    f"⚠️ 找不到文件夹「{display}」：{path}\n"
+                    "请检查 config.json 中的路径是否正确。"
+                )
 
         try:
             _startfile(path)

@@ -1,25 +1,26 @@
 """
-用户输入路由模块
-接收用户文本，识别是否为本地指令，返回 CommandResult。
+本地意图识别路由模块
 
-职责：
-- 加载 data/command_rules.json 中的指令规则（支持 type 分类）
-- 对输入做预处理后逐条关键词匹配
-- 命中规则 → 提取附加参数 → 返回 handled=True 的 CommandResult
-- 未命中 → 返回 handled=False、type="ai_chat"
+设计目标：
+    不依赖固定完整句子白名单，改用"意图分类 + 关键词组 + 参数提取 + 置信度评分"。
+    置信度 >= 0.65 时本地处理；< 0.65 时交给 AI。
 
-不在本模块实现：系统命令执行、AI 接口调用、UI 操作。
+置信度计算原则：
+    - 命中核心动作词  +0.6
+    - 命中意图关键词  +0.2 ~ +0.3（可叠加，最多到 0.95）
+    - 命中 AI 强意图词（写、生成、总结等）  -0.5
+    - 命中 AI 弱意图词（为什么、怎么做等）  -0.2
 
-指令分类（type）：
-    quick_app       打开常用应用
-    quick_folder    打开常用文件夹
-    screenshot      截图
-    web_search      网页搜索（需提取搜索词）
-    quick_note      快速笔记
-    todo            提醒/待办
-    system_status   系统状态查询
-    system_control  系统控制（音量/锁屏等）
-    ai_chat         未匹配，交给 AI
+识别优先级（由高到低）：
+    1. date_time   — 日期时间查询
+    2. screenshot  — 截图
+    3. system_control — 系统控制（静音/音量/锁屏）
+    4. system_status  — 系统状态查询
+    5. quick_open  — 打开应用或文件夹
+    6. web_search  — 网页搜索
+    7. todo        — 待办提醒
+    8. quick_note  — 快速笔记
+    9. ai_chat     — 兜底
 """
 
 import json
@@ -33,7 +34,11 @@ from app.logger import setup_logger
 
 logger = setup_logger()
 
+# 规则文件路径（只读配置，用 resource_path）
 _RULES_PATH = resource_path(os.path.join("data", "command_rules.json"))
+
+# 本地处理置信度阈值
+_CONFIDENCE_THRESHOLD = 0.65
 
 
 # ── 数据结构 ──────────────────────────────────────────────────
@@ -41,332 +46,484 @@ _RULES_PATH = resource_path(os.path.join("data", "command_rules.json"))
 @dataclass
 class CommandResult:
     """
-    指令路由结果。
+    意图识别结果。
 
     字段说明：
-        handled  是否命中本地指令规则
-        type     分类标识：quick_app / quick_folder / screenshot /
-                           web_search / quick_note / todo /
-                           system_status / system_control / ai_chat
-        message  展示给用户的确认/结果文本
-        action   具体动作标识（如 "open_wechat"），未命中时为 None
-        data     从输入中提取的参数字典，例如：
-                   web_search  → {"query": "Python 教程"}
-                   add_note    → {"content": "买咖啡"}
-                   add_reminder→ {"time": "18:30", "content": "喝水"}
-                   delete_reminder → {"index": 1}
-                   volume_up   → {"amount": 10}
+        handled     是否由本地处理（confidence >= 阈值）
+        type        意图分类：date_time / quick_open / web_search /
+                              quick_note / todo / screenshot /
+                              system_status / system_control / ai_chat
+        action      具体动作，例如 current_weekday / open_folder / add_note
+        message     给用户的确认文案（可为空，由 dispatcher 或 service 生成）
+        data        从输入中提取的参数字典
+        confidence  置信度 0.0~1.0
     """
-    handled: bool
-    type: str
-    message: str
-    action: Optional[str] = None
-    data: Optional[dict] = field(default=None)
+    handled:    bool
+    type:       str
+    action:     Optional[str]  = None
+    message:    str            = ""
+    data:       Optional[dict] = field(default=None)
+    confidence: float          = 0.0
 
 
 # ── 路由器 ────────────────────────────────────────────────────
 
 class CommandRouter:
     """
-    用户输入路由器。
+    本地意图识别路由器。
 
     实例化时从 command_rules.json 加载规则。
-    匹配策略：统一转小写 + 去空格后做"包含匹配"，首条命中即返回。
+    外部调用 route(text) 获取 CommandResult。
 
     使用方式：
         router = CommandRouter()
-        result = router.route("搜索 Python 教程")
-        # result.type == "web_search"
-        # result.data == {"query": "Python 教程"}
+        result = router.route("今天周几")
+        # result.type == "date_time", result.action == "current_weekday"
     """
 
     def __init__(self):
-        self._rules: list[dict] = []
+        self._rules: dict = {}
         self._load_rules()
 
     # ── 规则加载 ──────────────────────────────────────────────
 
     def _load_rules(self):
         """
-        加载规则文件。
-        文件不存在时记录警告，规则保持空列表（不崩溃）；
-        JSON 损坏时自动备份为 .bak 并重置，确保下次能正常加载。
+        从 command_rules.json 加载规则。
+        文件不存在或损坏时使用内置最小规则，保证程序可运行。
         """
         if not os.path.exists(_RULES_PATH):
-            logger.warning(f"指令规则文件不存在：{_RULES_PATH}（本地指令将不可用）")
+            logger.warning(f"规则文件不存在：{_RULES_PATH}，使用内置最小规则")
+            self._rules = {}
             return
         try:
             with open(_RULES_PATH, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            self._rules = raw.get("rules", [])
-            logger.debug(f"已加载 {len(self._rules)} 条指令规则")
+                self._rules = json.load(f)
+            logger.debug("意图规则加载成功")
         except json.JSONDecodeError as e:
-            # JSON 损坏：备份后重置，使程序继续运行
             backup = _RULES_PATH + ".bak"
             try:
                 os.replace(_RULES_PATH, backup)
                 logger.error(f"command_rules.json 格式异常，已备份到 {backup}：{e}")
             except OSError as be:
-                logger.error(f"备份 command_rules.json 失败：{be}")
+                logger.error(f"备份规则文件失败：{be}")
+            self._rules = {}
         except IOError as e:
-            logger.error(f"读取指令规则文件失败：{e}")
+            logger.error(f"读取规则文件失败：{e}")
+            self._rules = {}
 
-    # ── 路由入口 ──────────────────────────────────────────────
+    # ── 公开接口 ──────────────────────────────────────────────
 
     def route(self, text: str) -> CommandResult:
         """
-        对用户输入进行路由判断，返回 CommandResult。
+        对用户输入进行意图识别，返回 CommandResult。
 
         参数：
-            text: 用户原始输入文本（保留原始格式用于参数提取）
+            text: 用户原始输入
         """
-        stripped = text.strip() if text else ""
-        if not stripped:
-            return CommandResult(handled=False, type="ai_chat", message="")
+        if not text or not text.strip():
+            return CommandResult(handled=False, type="ai_chat", confidence=0.0)
 
-        norm = _normalize(stripped)
+        norm = _normalize(text)
 
-        for rule in self._rules:
-            action: str = rule.get("action", "")
-            cmd_type: str = rule.get("type", "local_command")
-            keywords: list[str] = rule.get("keywords", [])
+        # 计算 AI 意图惩罚分（越高说明越像 AI 创作请求）
+        ai_penalty = self._calc_ai_penalty(norm)
 
-            for kw in keywords:
-                if _normalize(kw) in norm:
-                    data = self._extract(action, cmd_type, stripped, kw)
-                    msg  = self._build_message(action, cmd_type, stripped, data,
-                                               rule.get("description", ""))
-                    logger.debug(f"路由命中：input={stripped!r}  action={action}")
-                    return CommandResult(
-                        handled=True,
-                        type=cmd_type,
-                        message=msg,
-                        action=action,
-                        data=data or None,
-                    )
+        # 按优先级依次尝试各意图识别器
+        candidates = [
+            self._match_date_time(norm),
+            self._match_screenshot(norm),
+            self._match_system_control(norm),
+            self._match_system_status(norm),
+            self._match_quick_open(norm, text),
+            self._match_web_search(norm, text),
+            self._match_todo(norm, text),
+            self._match_quick_note(norm, text),
+        ]
 
-        logger.debug(f"路由未命中，转 AI：{stripped!r}")
-        return CommandResult(handled=False, type="ai_chat", message=stripped)
+        # 选出置信度最高的候选
+        best: Optional[CommandResult] = None
+        for c in candidates:
+            if c is None:
+                continue
+            # 施加 AI 意图惩罚
+            # date_time/screenshot 等只在强意图词出现时才打折降级（弱意图词不影响）
+            if c.type in ("date_time", "screenshot"):
+                adjusted = c.confidence - (ai_penalty if ai_penalty >= 0.5 else 0.0)
+            else:
+                adjusted = c.confidence - ai_penalty
+            c = CommandResult(
+                handled=c.handled, type=c.type, action=c.action,
+                message=c.message, data=c.data,
+                confidence=max(0.0, min(1.0, adjusted)),
+            )
+            if best is None or c.confidence > best.confidence:
+                best = c
 
-    # ── 参数提取 ──────────────────────────────────────────────
+        # 置信度达到阈值 → 本地处理
+        if best and best.confidence >= _CONFIDENCE_THRESHOLD:
+            logger.debug(
+                f"意图命中：type={best.type}  action={best.action}  "
+                f"conf={best.confidence:.2f}  input={text!r}"
+            )
+            return CommandResult(
+                handled=True, type=best.type, action=best.action,
+                message=best.message, data=best.data, confidence=best.confidence,
+            )
 
-    def _extract(self, action: str, cmd_type: str,
-                 text: str, matched_kw: str) -> dict:
+        # 置信度不足 → ai_chat
+        logger.debug(
+            f"意图未命中（最高置信度={best.confidence if best else 0:.2f}），"
+            f"转 ai_chat：{text!r}"
+        )
+        return CommandResult(
+            handled=False, type="ai_chat",
+            message=text.strip(), confidence=0.0,
+        )
+
+    # ── AI 意图惩罚 ───────────────────────────────────────────
+
+    def _calc_ai_penalty(self, norm: str) -> float:
         """
-        根据 action/type 从原始文本中提取附加参数。
-        每种类型只处理自己的提取逻辑，互不干扰。
+        计算 AI 意图惩罚分。
+        强意图词（写、生成、总结等）惩罚 0.5；弱意图词惩罚 0.2。
+        两类最多分别叠加一次（避免单句多词惩罚过度）。
         """
-        params: dict = {}
+        indicators = self._rules.get("ai_chat_indicators", {})
+        strong_words = indicators.get("strong", [])
+        weak_words   = indicators.get("weak", [])
 
-        # ── 网页搜索：提取搜索词 + 引擎 ────────────────────────
-        if cmd_type == "web_search":
-            params["query"] = _extract_after_keyword(text, matched_kw)
-            # 根据触发关键词推断用户希望使用的引擎
-            kw_lower = matched_kw.lower()
-            if "百度" in kw_lower:
-                params["engine"] = "baidu"
-            elif "必应" in kw_lower or "bing" in kw_lower:
-                params["engine"] = "bing"
-            elif "谷歌" in kw_lower or "google" in kw_lower:
-                params["engine"] = "google"
-            # 未指定引擎时不写入，让 SearchService 用默认值
+        has_strong = any(_normalize(w) in norm for w in strong_words)
+        has_weak   = any(_normalize(w) in norm for w in weak_words)
 
-        # ── 快速笔记：提取笔记内容 ───────────────────────────
-        elif action == "add_note":
-            content = _extract_after_keyword(text, matched_kw)
-            if content:
-                params["content"] = content
+        penalty = 0.0
+        if has_strong:
+            penalty += 0.5
+        if has_weak and not has_strong:
+            # 弱意图惩罚：仅在无强意图时叠加（强意图已足以转 AI）
+            penalty += 0.2
+        return penalty
 
-        # ── 提醒：提取时间和内容 ─────────────────────────────
-        elif action == "add_reminder":
-            time_str, content = _extract_reminder(text)
-            if time_str:
-                params["time"] = time_str
-            if content:
-                params["content"] = content
+    # ── 各意图识别器 ──────────────────────────────────────────
 
-        elif action == "delete_reminder":
-            # 提取序号，如"删除提醒 1"或"取消第2条提醒"
-            m = re.search(r"第?\s*(\d+)\s*[条个项]?", text)
-            if m:
-                params["index"] = int(m.group(1))
+    def _match_date_time(self, norm: str) -> Optional[CommandResult]:
+        """
+        日期时间意图识别。
+        先检查 action patterns，再检查时间关键词 + 查询动词组合。
+        """
+        dt_rules = self._rules.get("date_time", {})
+        time_kws  = [_normalize(w) for w in dt_rules.get("time_keywords", [])]
+        query_vbs = [_normalize(w) for w in dt_rules.get("query_verbs", [])]
 
-        # ── 系统控制：提取音量调整幅度 ───────────────────────
-        elif action in ("volume_up", "volume_down"):
-            m = re.search(r"(\d+)\s*%?", text)
-            params["amount"] = int(m.group(1)) if m else 10
+        # 1. 精确 pattern 匹配（按 pattern 长度降序，优先匹配最长、最精确的）
+        all_patterns: list[tuple[str, str]] = []
+        for act_rule in dt_rules.get("actions", []):
+            action   = act_rule.get("action", "")
+            for p in act_rule.get("patterns", []):
+                all_patterns.append((_normalize(p), action))
+        # 按 pattern 长度降序，避免短 pattern（如"周几"）遮蔽长 pattern（如"明天周几"）
+        all_patterns.sort(key=lambda x: len(x[0]), reverse=True)
 
-        return params
+        for p, action in all_patterns:
+            if p in norm:
+                return CommandResult(
+                    handled=True, type="date_time",
+                    action=action, confidence=0.95,
+                )
 
-    # ── 消息构建 ──────────────────────────────────────────────
+        # 2. 时间关键词 + 查询动词组合（置信度 0.75）
+        has_time_kw  = any(kw in norm for kw in time_kws)
+        has_query_vb = any(vb in norm for vb in query_vbs)
+        if has_time_kw and has_query_vb:
+            # 推断最接近的 action
+            action = self._infer_datetime_action(norm)
+            return CommandResult(
+                handled=True, type="date_time",
+                action=action, confidence=0.75,
+            )
 
-    def _build_message(self, action: str, cmd_type: str,
-                       text: str, data: dict, description: str) -> str:
-        """根据 action 和提取到的参数，返回展示给用户的自然语言确认文字"""
+        # 3. 只有时间关键词（置信度 0.65，仍尝试）
+        if has_time_kw:
+            action = self._infer_datetime_action(norm)
+            return CommandResult(
+                handled=True, type="date_time",
+                action=action, confidence=0.65,
+            )
 
-        # ── 快捷应用 ─────────────────────────────────────────
-        _app_msgs = {
-            "open_wechat":      "好的，正在打开微信…",
-            "open_browser":     "好的，正在打开浏览器…",
-            "open_word":        "好的，正在打开 Word…",
-            "open_excel":       "好的，正在打开 Excel…",
-            "open_calculator":  "好的，正在打开计算器…",
-            "open_notepad":     "好的，正在打开记事本…",
-        }
-        if action in _app_msgs:
-            return _app_msgs[action]
+        return None
 
-        # ── 快捷文件夹 ───────────────────────────────────────
-        _folder_msgs = {
-            "open_folder_desktop":     "正在打开桌面…",
-            "open_folder_downloads":   "正在打开下载文件夹…",
-            "open_folder_documents":   "正在打开文档文件夹…",
-            "open_folder_pictures":    "正在打开图片文件夹…",
-            "open_folder_projects":    "正在打开项目目录…",
-            "open_folder_screenshots": "正在打开截图目录…",
-        }
-        if action in _folder_msgs:
-            return _folder_msgs[action]
+    def _infer_datetime_action(self, norm: str) -> str:
+        """根据规范化输入推断最合适的日期时间 action"""
+        if "明天" in norm and ("星期" in norm or "周" in norm or "礼拜" in norm):
+            return "tomorrow_weekday"
+        if ("星期" in norm or "周几" in norm or "礼拜" in norm) and "今天" in norm:
+            return "current_weekday"
+        if "几点" in norm or "时间" in norm or "时刻" in norm:
+            return "current_time"
+        if "几号" in norm or "日期" in norm or "哪天" in norm:
+            return "current_date"
+        if "明天" in norm:
+            return "tomorrow_weekday"
+        return "current_datetime"
 
-        # ── 截图 ─────────────────────────────────────────────
-        if action == "screenshot":
-            return "好的，正在截图…"
+    def _match_screenshot(self, norm: str) -> Optional[CommandResult]:
+        """截图意图识别"""
+        keywords = [_normalize(k) for k in
+                    self._rules.get("screenshot", {}).get("keywords", [])]
+        if any(kw in norm for kw in keywords):
+            return CommandResult(
+                handled=True, type="screenshot",
+                action="take_screenshot", confidence=0.9,
+            )
+        return None
 
-        # ── 网页搜索 ─────────────────────────────────────────
-        if action == "web_search":
-            query = data.get("query", "")
-            return f"好的，正在搜索「{query}」…" if query else "好的，正在打开搜索引擎…"
+    def _match_system_control(self, norm: str) -> Optional[CommandResult]:
+        """系统控制意图识别（静音/音量/锁屏）"""
+        ctrl = self._rules.get("system_control", {})
 
-        # ── 快速笔记 ─────────────────────────────────────────
-        if action == "add_note":
-            content = data.get("content", "")
-            return f"已记录：{content}" if content else "好的，请告诉我要记什么？"
-        if action == "list_notes":
-            return "正在查询笔记…"
-        if action == "clear_notes":
-            return "笔记已全部清空。"
+        def _hit(kws: list) -> bool:
+            return any(_normalize(k) in norm for k in kws)
 
-        # ── 提醒 ─────────────────────────────────────────────
-        if action == "add_reminder":
-            t = data.get("time", "")
-            c = data.get("content", "")
-            if t and c:
-                return f"好的，将在 {t} 提醒你：{c}"
-            if c:
-                return f"好的，已添加提醒：{c}（请补充时间）"
-            return "好的，请告诉我提醒时间和内容。"
-        if action == "list_reminders":
-            return "正在查询提醒列表…"
-        if action == "delete_reminder":
-            idx = data.get("index")
-            return f"已删除第 {idx} 条提醒。" if idx else "请告诉我要删除第几条提醒。"
+        if _hit(ctrl.get("mute_keywords", [])):
+            return CommandResult(handled=True, type="system_control",
+                                 action="mute", confidence=0.9)
+        if _hit(ctrl.get("unmute_keywords", [])):
+            return CommandResult(handled=True, type="system_control",
+                                 action="unmute", confidence=0.9)
+        if _hit(ctrl.get("volume_up_keywords", [])):
+            amount = _extract_number(norm, default=10)
+            return CommandResult(handled=True, type="system_control",
+                                 action="volume_up",
+                                 data={"amount": amount}, confidence=0.9)
+        if _hit(ctrl.get("volume_down_keywords", [])):
+            amount = _extract_number(norm, default=10)
+            return CommandResult(handled=True, type="system_control",
+                                 action="volume_down",
+                                 data={"amount": amount}, confidence=0.9)
+        if _hit(ctrl.get("lock_keywords", [])):
+            return CommandResult(handled=True, type="system_control",
+                                 action="lock_screen", confidence=0.9)
+        return None
 
-        # ── 系统状态 ─────────────────────────────────────────
-        _status_msgs = {
-            "system_status_all": "正在获取电脑状态…",
-            "check_cpu":         "正在查询 CPU 使用率…",
-            "check_memory":      "正在查询内存使用情况…",
-            "check_disk":        "正在查询硬盘使用情况…",
-            "check_battery":     "正在查询电池电量…",
-        }
-        if action in _status_msgs:
-            return _status_msgs[action]
+    def _match_system_status(self, norm: str) -> Optional[CommandResult]:
+        """系统状态查询意图识别"""
+        ss = self._rules.get("system_status", {})
 
-        # ── 系统控制 ─────────────────────────────────────────
-        if action == "lock_screen":
-            return "好的，马上锁屏。"
-        if action == "mute":
-            return "已静音。"
-        if action == "unmute":
-            return "已取消静音。"
-        if action == "volume_up":
-            return f"音量增加 {data.get('amount', 10)}%。"
-        if action == "volume_down":
-            return f"音量降低 {data.get('amount', 10)}%。"
+        def _hit(kws: list) -> bool:
+            return any(_normalize(k) in norm for k in kws)
 
-        # 兜底
-        return f"已识别指令：{description}"
+        prefix_kws  = [_normalize(p) for p in ss.get("query_prefix", [])]
+        has_prefix  = any(p in norm for p in prefix_kws)
+
+        if _hit(ss.get("full_keywords", [])):
+            return CommandResult(handled=True, type="system_status",
+                                 action="full_status", confidence=0.88)
+
+        if _hit(ss.get("cpu_keywords", [])):
+            conf = 0.85 if has_prefix else 0.72
+            return CommandResult(handled=True, type="system_status",
+                                 action="cpu_status", confidence=conf)
+        if _hit(ss.get("memory_keywords", [])):
+            conf = 0.85 if has_prefix else 0.72
+            return CommandResult(handled=True, type="system_status",
+                                 action="memory_status", confidence=conf)
+        if _hit(ss.get("disk_keywords", [])):
+            conf = 0.85 if has_prefix else 0.72
+            return CommandResult(handled=True, type="system_status",
+                                 action="disk_status", confidence=conf)
+        if _hit(ss.get("battery_keywords", [])):
+            conf = 0.85 if has_prefix else 0.72
+            return CommandResult(handled=True, type="system_status",
+                                 action="battery_status", confidence=conf)
+        return None
+
+    def _match_quick_open(self, norm: str, raw: str) -> Optional[CommandResult]:
+        """打开应用 / 文件夹意图识别"""
+        qo   = self._rules.get("quick_open", {})
+        verbs = [_normalize(v) for v in qo.get("verbs", [])]
+
+        has_verb = any(v in norm for v in verbs)
+        if not has_verb:
+            return None
+
+        # 先尝试匹配文件夹别名（优先度高于应用）
+        folder_aliases = qo.get("folder_aliases", {})
+        for alias, action in folder_aliases.items():
+            if _normalize(alias) in norm:
+                return CommandResult(
+                    handled=True, type="quick_open",
+                    action="open_folder",
+                    data={"target_name": alias},
+                    confidence=0.9,
+                )
+
+        # 再尝试匹配应用别名
+        app_aliases = qo.get("app_aliases", {})
+        for alias, action in app_aliases.items():
+            if _normalize(alias) in norm:
+                return CommandResult(
+                    handled=True, type="quick_open",
+                    action="open_app",
+                    data={"target_name": alias, "app_action": action},
+                    confidence=0.9,
+                )
+
+        # 动作词存在但对象名未知，置信度较低
+        return CommandResult(
+            handled=True, type="quick_open",
+            action="open_unknown",
+            data={"target_name": _extract_after_verbs(raw, qo.get("verbs", []))},
+            confidence=0.55,  # 低于阈值 → 转 AI
+        )
+
+    def _match_web_search(self, norm: str, raw: str) -> Optional[CommandResult]:
+        """网页搜索意图识别"""
+        ws   = self._rules.get("web_search", {})
+        verbs = [_normalize(v) for v in ws.get("verbs", [])]
+
+        for v in verbs:
+            if v in norm:
+                # 提取搜索词：关键词后的内容
+                query  = _extract_after_verbs(raw, ws.get("verbs", []))
+                engine = _infer_engine(norm)
+                return CommandResult(
+                    handled=True, type="web_search",
+                    action="search_web",
+                    data={"query": query, "engine": engine},
+                    confidence=0.88,
+                )
+        return None
+
+    def _match_todo(self, norm: str, raw: str) -> Optional[CommandResult]:
+        """待办提醒意图识别"""
+        td = self._rules.get("todo", {})
+
+        # 删除提醒
+        del_kws = [_normalize(k) for k in td.get("delete_keywords", [])]
+        if any(k in norm for k in del_kws):
+            m = re.search(r"第?\s*(\d+)\s*[条个项]?", raw)
+            todo_id = int(m.group(1)) if m else None
+            return CommandResult(
+                handled=True, type="todo",
+                action="delete_todo",
+                data={"todo_id": todo_id},
+                confidence=0.9,
+            )
+
+        # 查看提醒
+        list_kws = [_normalize(k) for k in td.get("list_keywords", [])]
+        if any(k in norm for k in list_kws):
+            return CommandResult(
+                handled=True, type="todo",
+                action="list_todo", confidence=0.9,
+            )
+
+        # 新增提醒
+        add_vbs = [_normalize(v) for v in td.get("add_verbs", [])]
+        if any(v in norm for v in add_vbs):
+            return CommandResult(
+                handled=True, type="todo",
+                action="add_todo",
+                data={"raw_text": raw},
+                confidence=0.88,
+            )
+
+        return None
+
+    def _match_quick_note(self, norm: str, raw: str) -> Optional[CommandResult]:
+        """快速笔记意图识别"""
+        qn = self._rules.get("quick_note", {})
+
+        # 清空笔记
+        clear_kws = [_normalize(k) for k in qn.get("clear_keywords", [])]
+        if any(k in norm for k in clear_kws):
+            return CommandResult(
+                handled=True, type="quick_note",
+                action="clear_notes", confidence=0.9,
+            )
+
+        # 查看笔记
+        list_kws = [_normalize(k) for k in qn.get("list_keywords", [])]
+        if any(k in norm for k in list_kws):
+            return CommandResult(
+                handled=True, type="quick_note",
+                action="list_notes", confidence=0.9,
+            )
+
+        # 新增笔记
+        add_vbs = [_normalize(v) for v in qn.get("add_verbs", [])]
+        for v in add_vbs:
+            if _normalize(v) in norm:
+                content = _extract_after_verbs(raw, qn.get("add_verbs", []))
+                return CommandResult(
+                    handled=True, type="quick_note",
+                    action="add_note",
+                    data={"content": content},
+                    confidence=0.88,
+                )
+
+        return None
 
     # ── 调试工具 ──────────────────────────────────────────────
 
-    def list_actions(self) -> list[str]:
-        """返回所有已加载的 action 列表，方便调试"""
-        return [r.get("action", "") for r in self._rules]
-
-    def list_by_type(self, cmd_type: str) -> list[str]:
-        """按 type 过滤，返回对应的 action 列表"""
-        return [r["action"] for r in self._rules if r.get("type") == cmd_type]
+    def test_route(self, text: str) -> str:
+        """调试：返回识别结果摘要字符串"""
+        r = self.route(text)
+        return (
+            f"input={text!r}  handled={r.handled}  type={r.type}  "
+            f"action={r.action}  conf={r.confidence:.2f}  data={r.data}"
+        )
 
 
 # ── 纯函数工具 ────────────────────────────────────────────────
 
 def _normalize(text: str) -> str:
     """
-    统一预处理：转小写、去除空格和全角空格。
-    匹配时用此函数处理输入和关键词，使匹配对大小写和空格不敏感。
+    标准化文本：
+    - 去除前后空格
+    - 统一中文标点 → 英文（问号、冒号、逗号）
+    - 转小写
+    - 去掉多余空格和全角空格
     """
-    return text.lower().replace(" ", "").replace("\u3000", "")
-
-
-def _extract_after_keyword(text: str, keyword: str) -> str:
-    """
-    提取关键词之后的内容，去除常见标点前缀。
-    例如："搜索 Python 教程" → "Python 教程"
-         "帮我记一下：买咖啡" → "买咖啡"
-    """
-    idx = text.lower().find(keyword.lower())
-    if idx == -1:
+    if not text:
         return ""
-    after = text[idx + len(keyword):]
-    # 去掉开头的标点和空格
-    return after.strip(" \t：:，,。.、")
+    t = text.strip()
+    # 中文标点统一化
+    t = t.replace("？", "?").replace("！", "!").replace("，", ",")
+    t = t.replace("。", ".").replace("：", ":").replace("；", ";")
+    t = t.lower()
+    t = t.replace(" ", "").replace("\u3000", "")
+    return t
 
 
-def _extract_reminder(text: str) -> tuple[str, str]:
+def _extract_after_verbs(raw: str, verbs: list) -> str:
     """
-    从提醒文本中提取时间和内容。
-
-    支持格式：
-        提醒我 18:30 喝水
-        提醒我 2026-07-06 20:00 开会
-        提醒我明天 9:00 吃药
-        帮我提醒 下午3点 打电话
-
-    返回：(time_str, content)，提取失败时对应字段为空字符串。
+    提取动作词之后的内容。
+    按 verb 长度降序尝试，优先匹配较长的动作词，避免短词遮蔽。
+    返回去除首尾标点空格后的字符串。
     """
-    # 匹配 HH:MM 时间格式
-    time_hm = re.search(r"\d{1,2}[：:]\d{2}", text)
-    # 匹配"下午/上午 + 数字 + 点/时"格式
-    time_cn = re.search(r"[上下]午\s*\d{1,2}\s*[点时]", text)
-    # 匹配"明天/后天 + 时间"中的"明天/后天"
-    day_word = re.search(r"(今天|明天|后天|大后天)", text)
+    sorted_verbs = sorted(verbs, key=len, reverse=True)
+    raw_lower = raw.lower()
+    for v in sorted_verbs:
+        idx = raw_lower.find(v.lower())
+        if idx != -1:
+            after = raw[idx + len(v):]
+            return after.strip(" \t：:，,。.、?？")
+    return raw.strip()
 
-    time_str = ""
-    content  = ""
 
-    if time_hm:
-        time_str = time_hm.group(0)
-        # 内容在时间之后
-        content = text[time_hm.end():].strip(" ，,。.：:")
-    elif time_cn:
-        time_str = time_cn.group(0)
-        content  = text[time_cn.end():].strip(" ，,。.：:")
+def _extract_number(norm: str, default: int = 10) -> int:
+    """从规范化文本中提取第一个数字，提取失败时返回 default"""
+    m = re.search(r"(\d+)", norm)
+    return int(m.group(1)) if m else default
 
-    # 如果提取到日期词，拼在时间前面
-    if day_word and time_str:
-        time_str = day_word.group(0) + " " + time_str
 
-    # 若内容仍为空，尝试取关键词后所有文字
-    if not content:
-        for kw in ["提醒我", "帮我提醒", "设个提醒", "添加提醒", "定个提醒"]:
-            idx = text.find(kw)
-            if idx != -1:
-                after = text[idx + len(kw):].strip()
-                # 去掉开头的时间部分，剩余即内容
-                if time_str:
-                    after = after.replace(time_str.strip(), "").strip(" ，,。.：:")
-                if after:
-                    content = after
-                break
-
-    return time_str, content
+def _infer_engine(norm: str) -> str:
+    """根据规范化文本推断搜索引擎"""
+    if "百度" in norm:
+        return "baidu"
+    if "必应" in norm or "bing" in norm:
+        return "bing"
+    if "谷歌" in norm or "google" in norm:
+        return "google"
+    return ""  # 空字符串表示使用 SearchService 默认引擎
