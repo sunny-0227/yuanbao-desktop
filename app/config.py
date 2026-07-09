@@ -81,6 +81,19 @@ class ScreenshotConfig:
 
 
 @dataclass
+class VoiceConfig:
+    """语音交互配置"""
+    voice_enabled:       bool  = True                     # 是否启用语音功能（录音入口）
+    asr_provider:        str   = "none"                   # none / whisper / online
+    tts_enabled:         bool  = True                     # 是否启用回复语音播报
+    tts_provider:        str   = "edge"                   # edge / system
+    tts_voice:           str   = "zh-CN-XiaoxiaoNeural"   # edge-tts 音色
+    tts_max_chars:       int   = 200                      # 最大播报字数
+    pause_mic_during_tts: bool = True                     # 播报期间禁止录音（防自激）
+    mute_when_recording:  bool = False                    # 录音时静音输出（第一阶段不用）
+
+
+@dataclass
 class AppConfig:
     """顶层应用配置，聚合所有子配置"""
     app_name: str = "轻量化桌面AI效率助手"
@@ -91,6 +104,7 @@ class AppConfig:
     behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     screenshot: ScreenshotConfig = field(default_factory=ScreenshotConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     # 快捷应用列表，每项为 {"name": str, "command": str, "comment": str}
     quick_apps: list = field(default_factory=list)
     # 快捷文件夹列表，每项为 {"name": str, "path": str}
@@ -164,6 +178,19 @@ def load_config(config_path: str) -> AppConfig:
                 save_dir=ss.get("save_dir",     config.screenshot.save_dir),
                 format=ss.get("format",         config.screenshot.format),
                 auto_open=ss.get("auto_open",   config.screenshot.auto_open),
+            )
+
+            # ── 语音配置 ─────────────────────────────────────
+            vc = raw  # 语音字段放在顶层
+            config.voice = VoiceConfig(
+                voice_enabled=vc.get("voice_enabled",       config.voice.voice_enabled),
+                asr_provider=vc.get("asr_provider",         config.voice.asr_provider),
+                tts_enabled=vc.get("tts_enabled",           config.voice.tts_enabled),
+                tts_provider=vc.get("tts_provider",         config.voice.tts_provider),
+                tts_voice=vc.get("tts_voice",               config.voice.tts_voice),
+                tts_max_chars=vc.get("tts_max_chars",       config.voice.tts_max_chars),
+                pause_mic_during_tts=vc.get("pause_mic_during_tts", config.voice.pause_mic_during_tts),
+                mute_when_recording=vc.get("mute_when_recording",   config.voice.mute_when_recording),
             )
 
             # ── 快捷应用 / 文件夹 ────────────────────────────

@@ -32,6 +32,7 @@ def main():
     from ui.settings_window import SettingsWindow
     from services.todo_service import TodoService
     from services.auto_sleep_service import AutoSleepService
+    from services.app_discovery_service import AppDiscoveryService
 
     # 高 DPI 缩放支持（Windows 4K 屏幕友好）
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -105,7 +106,8 @@ def main():
         on_open_chat=open_chat,
         on_show_pet=pet_window.show,
         on_hide_pet=pet_window.hide,
-        on_open_settings=settings_window.open,   # 绑定设置窗口入口
+        on_open_settings=settings_window.open,
+        on_voice_input=chat_window.trigger_voice_input,
     )
     tray.show()
 
@@ -166,6 +168,37 @@ def main():
 
     # 启动后立即检查一次，避免程序启动时已有到期任务被忽略
     _check_reminders()
+
+    # ── 常用入口自动识别（后台执行，首次启动或 app_index.json 不存在时）───
+    import threading
+    from app.app_context import data_path
+
+    def _run_app_discovery():
+        """后台线程：首次扫描常用入口，完成后通过托盘气泡通知用户"""
+        try:
+            discovery = AppDiscoveryService()
+            index = discovery.build_app_index()
+            discovery.save_app_index(index)
+            n_apps, n_folders, n_websites = discovery.count_summary(index)
+            msg = (
+                f"已完成常用入口识别，识别到 {n_apps} 个软件、"
+                f"{n_folders} 个文件夹、{n_websites} 个网页入口。"
+            )
+            logger.info(f"常用入口识别完成：{msg}")
+            # 通过 Qt 信号回调到主线程展示通知
+            QTimer.singleShot(0, lambda: tray.show_sleep_notification(msg))
+        except Exception as e:
+            logger.warning(f"常用入口识别失败（不影响程序运行）：{e}")
+
+    _index_path = data_path("app_index.json")
+    if not os.path.exists(_index_path):
+        logger.info("app_index.json 不存在，启动后台首次扫描...")
+        _discovery_thread = threading.Thread(
+            target=_run_app_discovery, daemon=True, name="AppDiscovery"
+        )
+        _discovery_thread.start()
+    else:
+        logger.debug("app_index.json 已存在，跳过自动扫描")
 
     sys.exit(app.exec())
 

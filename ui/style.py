@@ -221,6 +221,47 @@ QWidget {
     color: #89b4fa;
 }
 
+/* ── 语音按钮 ── */
+#VoiceButton {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+        stop:0 #1e2d45, stop:1 #1a3a3a);
+    color: #74c7ec;
+    border: 1px solid #3a5a7a;
+    border-radius: 12px;
+    font-size: 12px; font-weight: bold;
+    min-width: 44px; min-height: 40px;
+}
+#VoiceButton:hover {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+        stop:0 #253550, stop:1 #204040);
+    border-color: #74c7ec;
+}
+#VoiceButton:pressed {
+    background: #131c2a;
+}
+#VoiceStopButton {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+        stop:0 #3a1a2a, stop:1 #2a1a3a);
+    color: #f38ba8;
+    border: 1px solid #7a3a5a;
+    border-radius: 12px;
+    font-size: 12px; font-weight: bold;
+    min-width: 44px; min-height: 40px;
+}
+#VoiceStopButton:hover {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+        stop:0 #501a2a, stop:1 #3a1a50);
+    border-color: #f38ba8;
+}
+#VoiceDisabledButton {
+    background: #1a1a2e;
+    color: #45475a;
+    border: 1px solid #313244;
+    border-radius: 12px;
+    font-size: 11px;
+    min-width: 44px; min-height: 40px;
+}
+
 /* ══ 滚动条 ════════════════════════════════════════════════════ */
 QScrollBar:vertical {
     background: transparent;
@@ -320,6 +361,26 @@ QWidget {
 }
 #CopyButton:hover { background: #dce0ee; color: #5a5d8a; }
 #CopyButton:pressed { background: #c8cce0; color: #4a4d7a; }
+#VoiceButton {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #dce8f8,stop:1 #d0eaea);
+    color: #1e66a0; border: 1px solid #a0c4dc;
+    border-radius: 12px; font-size: 12px; font-weight: bold;
+    min-width: 44px; min-height: 40px;
+}
+#VoiceButton:hover { background: #c8dff0; border-color: #1e66a0; }
+#VoiceButton:pressed { background: #b0cce0; }
+#VoiceStopButton {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #f8dce0,stop:1 #ead0d8);
+    color: #a0001e; border: 1px solid #dca0b0;
+    border-radius: 12px; font-size: 12px; font-weight: bold;
+    min-width: 44px; min-height: 40px;
+}
+#VoiceStopButton:hover { background: #f0c8d0; border-color: #a0001e; }
+#VoiceDisabledButton {
+    background: #e6e9ef; color: #9ca0b0; border: 1px solid #ccd0da;
+    border-radius: 12px; font-size: 11px;
+    min-width: 44px; min-height: 40px;
+}
 QScrollBar:vertical { background: transparent; width: 5px; border-radius: 3px; }
 QScrollBar::handle:vertical { background: #c0c5dc; border-radius: 3px; min-height: 24px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }

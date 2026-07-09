@@ -16,3 +16,15 @@ Pillow>=10.0.0
 
 # 环境变量加载（读取 .env 中的 AI API Key 等）
 python-dotenv>=1.0.0
+
+# ── 语音功能依赖 ──────────────────────────────────────────────────────────────
+# TTS 播报（edge-tts：在线中文语音，效果好）
+edge-tts>=6.1.0
+# TTS 播报（pyttsx3：离线降级方案，edge-tts 不可用时使用）
+pyttsx3>=2.90
+# TTS 播报时用于播放 mp3（edge-tts 输出 mp3，pygame 负责播放）
+pygame>=2.5.0
+# 语音录音（sounddevice：比 pyaudio 更易安装，跨平台）
+sounddevice>=0.4.6
+# 录音数据处理（numpy 数组转 bytes 写入 wav）
+numpy>=1.24.0

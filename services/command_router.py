@@ -338,8 +338,16 @@ class CommandRouter:
         return None
 
     def _match_quick_open(self, norm: str, raw: str) -> Optional[CommandResult]:
-        """打开应用 / 文件夹意图识别"""
-        qo   = self._rules.get("quick_open", {})
+        """
+        打开应用 / 文件夹意图识别。
+
+        置信度策略：
+        - 命中已知别名（folder_aliases / app_aliases）：0.90
+        - 有动作词但目标名未知：0.80（高于阈值 0.65，交由 AppCommandService 查找）
+          → AppCommandService 会按 user_custom > config > app_index > 系统工具 顺序查找
+          → 找不到时给出友好提示，不会静默失败
+        """
+        qo    = self._rules.get("quick_open", {})
         verbs = [_normalize(v) for v in qo.get("verbs", [])]
 
         has_verb = any(v in norm for v in verbs)
@@ -368,12 +376,17 @@ class CommandRouter:
                     confidence=0.9,
                 )
 
-        # 动作词存在但对象名未知，置信度较低
+        # 动作词存在但目标名未知：
+        # 提取目标名后交由 AppCommandService 动态查找（app_index + user_custom）
+        target = _extract_open_target(raw, qo.get("verbs", []))
+        if not target:
+            return None  # 无法提取目标名，交 AI 处理
+
         return CommandResult(
             handled=True, type="quick_open",
             action="open_unknown",
-            data={"target_name": _extract_after_verbs(raw, qo.get("verbs", []))},
-            confidence=0.55,  # 低于阈值 → 转 AI
+            data={"target_name": target},
+            confidence=0.80,  # 高于阈值，由 AppCommandService 决定能否处理
         )
 
     def _match_web_search(self, norm: str, raw: str) -> Optional[CommandResult]:
@@ -510,6 +523,35 @@ def _extract_after_verbs(raw: str, verbs: list) -> str:
             after = raw[idx + len(v):]
             return after.strip(" \t：:，,。.、?？")
     return raw.strip()
+
+
+def _extract_open_target(raw: str, verbs: list) -> str:
+    """
+    从"打开 xxx"类句子中提取目标名称。
+    比 _extract_after_verbs 更严格：
+    1. 去除动作词后面的语气助词（"一下""帮我""给我"等）
+    2. 去除尾部标点
+    3. 若提取结果包含 AI 指示词（如"帮我写""生成"），返回空（交给 AI）
+    """
+    _NOISE_PREFIX = ["一下", "帮我", "给我", "帮忙", "请", "你帮"]
+    _AI_SIGNS     = ["写", "生成", "做一个", "分析", "总结", "翻译",
+                     "解释", "推荐", "建议", "计划", "方案"]
+
+    target = _extract_after_verbs(raw, verbs)
+    if not target:
+        return ""
+
+    # 去除语气前缀
+    for noise in _NOISE_PREFIX:
+        if target.startswith(noise):
+            target = target[len(noise):].strip()
+
+    # 如果包含 AI 类动词，说明是要 AI 来做，不是打开软件
+    for sign in _AI_SIGNS:
+        if sign in target:
+            return ""
+
+    return target.strip()
 
 
 def _extract_number(norm: str, default: int = 10) -> int:

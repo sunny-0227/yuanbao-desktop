@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox,
     QPushButton, QScrollArea, QFrame, QMessageBox,
-    QSpinBox,
+    QSpinBox, QFileDialog, QTableWidget, QTableWidgetItem,
+    QHeaderView, QTabWidget,
 )
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QFont
@@ -135,6 +136,15 @@ def _lines_to_folders(text: str) -> list:
     return result
 
 
+# ── 辅助：简单输入对话框 ──────────────────────────────────────────
+
+def _simple_input_dialog(parent, title: str, label: str, default: str = "") -> tuple[str, bool]:
+    """弹出简单的单行输入对话框，返回 (text, ok)"""
+    from PySide6.QtWidgets import QInputDialog
+    text, ok = QInputDialog.getText(parent, title, label, text=default)
+    return text, ok
+
+
 # ── 主窗口 ──────────────────────────────────────────────────────
 
 class SettingsWindow(QWidget):
@@ -148,12 +158,14 @@ class SettingsWindow(QWidget):
     调用 open() 而不是 show()，确保每次打开都刷新数据。
     """
 
-    _test_result = Signal(bool, str)   # 测试 AI 连接结果信号（跨线程回调到主线程）
+    _test_result           = Signal(bool, str)   # 测试 AI 连接结果
+    _discovery_refresh_done = Signal(bool, str)  # 重新识别完成
 
     def __init__(self, theme: str = "dark", parent=None):
         super().__init__(parent)
         self._theme = theme
         self._test_result.connect(self._on_test_ai_done)
+        self._discovery_refresh_done.connect(self._on_refresh_index_done)
         self._init_window()
         self._build_ui()
         self._apply_style()
@@ -204,6 +216,8 @@ class SettingsWindow(QWidget):
         self._build_quick_apps_section()
         self._build_quick_folders_section()
         self._build_blacklist_section()
+        self._build_voice_section()
+        self._build_discovery_section()
 
         self._content_layout.addStretch()
         scroll.setWidget(content)
@@ -429,6 +443,250 @@ class SettingsWindow(QWidget):
         self._blacklist_edit.setPlaceholderText("steam.exe\nblender.exe")
         self._content_layout.addWidget(self._blacklist_edit)
 
+    def _build_voice_section(self):
+        self._content_layout.addWidget(self._divider())
+        self._content_layout.addWidget(self._section_label("🎤 语音设置"))
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(10)
+
+        # 是否启用语音功能（录音入口）
+        self._voice_enabled_check = QCheckBox("启用语音输入（聊天窗口显示语音按钮）")
+        form.addRow("", self._voice_enabled_check)
+
+        # TTS 启用
+        self._tts_enabled_check = QCheckBox("启用语音播报（AI 回复后朗读）")
+        form.addRow("", self._tts_enabled_check)
+
+        # TTS provider
+        self._tts_provider_box = QComboBox()
+        self._tts_provider_box.addItems(["edge", "system"])
+        self._tts_provider_box.setToolTip(
+            "edge = edge-tts（在线，中文效果好）\n"
+            "system = pyttsx3（离线，系统 TTS）"
+        )
+        form.addRow("播报引擎：", self._tts_provider_box)
+
+        # TTS voice
+        self._tts_voice_edit = QLineEdit()
+        self._tts_voice_edit.setPlaceholderText("zh-CN-XiaoxiaoNeural")
+        self._tts_voice_edit.setToolTip("edge-tts 音色名称，仅当引擎为 edge 时生效")
+        form.addRow("播报音色：", self._tts_voice_edit)
+
+        # TTS max chars
+        self._tts_max_chars_spin = QSpinBox()
+        self._tts_max_chars_spin.setRange(20, 1000)
+        self._tts_max_chars_spin.setSuffix(" 字")
+        self._tts_max_chars_spin.setToolTip("超过此字数只播报提示语，不播报全文")
+        form.addRow("最大播报字数：", self._tts_max_chars_spin)
+
+        # ASR provider
+        self._asr_provider_box = QComboBox()
+        self._asr_provider_box.addItems(["none", "whisper", "online"])
+        self._asr_provider_box.setToolTip(
+            "none = 不进行语音识别，仅保存录音\n"
+            "whisper = 本地 Whisper 模型（需先安装 faster-whisper）\n"
+            "online = 在线 ASR API（需自行实现接口）"
+        )
+        form.addRow("语音识别：", self._asr_provider_box)
+
+        self._content_layout.addLayout(form)
+
+        # 提示文案
+        tip1 = QLabel(
+            "💡 当前版本不支持唤醒词，语音输入需点击「语音」按钮手动启动。"
+        )
+        tip1.setObjectName("HintLabel")
+        tip1.setWordWrap(True)
+        self._content_layout.addWidget(tip1)
+
+        tip2 = QLabel(
+            "💡 ASR 第一阶段为预留能力，选择 none 时只保存录音文件，不进行语音转文字。\n"
+            "   选择 whisper 或 online 需在代码中完成对应实现。"
+        )
+        tip2.setObjectName("HintLabel")
+        tip2.setWordWrap(True)
+        self._content_layout.addWidget(tip2)
+
+    def _build_discovery_section(self):
+        self._content_layout.addWidget(self._divider())
+        self._content_layout.addWidget(self._section_label("🔍 常用入口识别"))
+
+        hint = QLabel(
+            "图图助手会自动扫描你的桌面快捷方式、开始菜单等位置，\n"
+            "识别常用软件、文件夹和网页入口，保存在本机 data/app_index.json。"
+        )
+        hint.setObjectName("HintLabel")
+        hint.setWordWrap(True)
+        self._content_layout.addWidget(hint)
+
+        # 操作按钮行
+        btn_row = QHBoxLayout()
+        self._refresh_index_btn = QPushButton("🔄 重新识别常用入口")
+        self._refresh_index_btn.setObjectName("DiscoveryButton")
+        self._refresh_index_btn.setFixedHeight(32)
+        self._refresh_index_btn.setToolTip("重新扫描桌面 / 开始菜单快捷方式")
+        self._refresh_index_btn.clicked.connect(self._on_refresh_index)
+        btn_row.addWidget(self._refresh_index_btn)
+
+        self._add_app_btn = QPushButton("➕ 手动添加软件")
+        self._add_app_btn.setObjectName("DiscoveryButton")
+        self._add_app_btn.setFixedHeight(32)
+        self._add_app_btn.setToolTip("选择 .exe 文件并填写名称，永久保存到 user_custom_entries.json")
+        self._add_app_btn.clicked.connect(self._on_add_custom_app)
+        btn_row.addWidget(self._add_app_btn)
+
+        self._add_folder_btn = QPushButton("📂 手动添加文件夹")
+        self._add_folder_btn.setObjectName("DiscoveryButton")
+        self._add_folder_btn.setFixedHeight(32)
+        self._add_folder_btn.setToolTip("选择文件夹并填写名称，永久保存到 user_custom_entries.json")
+        self._add_folder_btn.clicked.connect(self._on_add_custom_folder)
+        btn_row.addWidget(self._add_folder_btn)
+        btn_row.addStretch()
+        self._content_layout.addLayout(btn_row)
+
+        # 识别结果 Tab 展示
+        self._discovery_tabs = QTabWidget()
+        self._discovery_tabs.setObjectName("DiscoveryTabs")
+        self._discovery_tabs.setFixedHeight(200)
+
+        for tab_name in ("软件", "文件夹", "网页", "系统工具"):
+            table = QTableWidget(0, 3)
+            table.setObjectName(f"DiscoveryTable_{tab_name}")
+            table.setHorizontalHeaderLabels(["名称", "路径 / URL", "来源"])
+            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+            table.verticalHeader().setVisible(False)
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            self._discovery_tabs.addTab(table, tab_name)
+
+        self._content_layout.addWidget(self._discovery_tabs)
+
+        # 状态标签
+        self._discovery_status = QLabel("点击「重新识别」或重启程序以加载识别结果。")
+        self._discovery_status.setObjectName("HintLabel")
+        self._content_layout.addWidget(self._discovery_status)
+
+        # 初始加载已有索引
+        self._load_discovery_into_ui()
+
+    def _load_discovery_into_ui(self):
+        """从 app_index.json 加载数据填充表格"""
+        try:
+            from services.app_discovery_service import AppDiscoveryService
+            svc   = AppDiscoveryService()
+            index = svc.load_app_index()
+
+            category_map = {
+                0: ("apps",         "path"),
+                1: ("folders",      "path"),
+                2: ("websites",     "url"),
+                3: ("system_tools", "command"),
+            }
+            for tab_idx, (category, path_key) in category_map.items():
+                table: QTableWidget = self._discovery_tabs.widget(tab_idx)
+                table.setRowCount(0)
+                for name, entry in index.get(category, {}).items():
+                    row = table.rowCount()
+                    table.insertRow(row)
+                    table.setItem(row, 0, QTableWidgetItem(entry.get("display_name", name)))
+                    table.setItem(row, 1, QTableWidgetItem(entry.get(path_key, "")))
+                    table.setItem(row, 2, QTableWidgetItem(entry.get("source", "")))
+
+            n_apps    = len(index.get("apps", {}))
+            n_folders = len(index.get("folders", {}))
+            n_web     = len(index.get("websites", {}))
+            self._discovery_status.setText(
+                f"共识别到 {n_apps} 个软件、{n_folders} 个文件夹、{n_web} 个网页入口。"
+            )
+        except Exception as e:
+            self._discovery_status.setText(f"加载识别结果失败：{e}")
+            logger.warning(f"SettingsWindow 加载 app_index 失败：{e}")
+
+    def _on_refresh_index(self):
+        """后台重新扫描并刷新列表"""
+        self._refresh_index_btn.setEnabled(False)
+        self._refresh_index_btn.setText("识别中…")
+
+        def _worker():
+            try:
+                from services.app_discovery_service import AppDiscoveryService
+                svc   = AppDiscoveryService()
+                index = svc.refresh_index()
+                self._discovery_refresh_done.emit(True, "")
+            except Exception as e:
+                self._discovery_refresh_done.emit(False, str(e))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    @Slot(bool, str)
+    def _on_refresh_index_done(self, ok: bool, err: str):
+        self._refresh_index_btn.setEnabled(True)
+        self._refresh_index_btn.setText("🔄 重新识别常用入口")
+        if ok:
+            self._load_discovery_into_ui()
+        else:
+            self._discovery_status.setText(f"识别失败：{err}")
+
+    def _on_add_custom_app(self):
+        """手动选择 exe 并添加到 user_custom_entries.json"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择软件程序", "",
+            "程序文件 (*.exe);;所有文件 (*)"
+        )
+        if not path:
+            return
+        default_name = os.path.splitext(os.path.basename(path))[0]
+        name, ok = _simple_input_dialog(self, "添加软件", "显示名称：", default_name)
+        if not ok or not name.strip():
+            return
+        try:
+            from services.app_command_service import _save_custom_entries, _load_custom_entries
+            data = _load_custom_entries()
+            data["apps"][name.strip()] = {
+                "display_name": name.strip(),
+                "path":         path,
+                "arguments":    "",
+                "working_dir":  "",
+                "source":       "user_custom",
+                "aliases":      [name.strip()],
+                "confidence":   1.0,
+            }
+            _save_custom_entries(data)
+            QMessageBox.information(self, "添加成功", f"已添加「{name.strip()}」")
+            self._load_discovery_into_ui()
+        except Exception as e:
+            QMessageBox.warning(self, "添加失败", str(e))
+
+    def _on_add_custom_folder(self):
+        """手动选择文件夹并添加到 user_custom_entries.json"""
+        path = QFileDialog.getExistingDirectory(self, "选择文件夹", "")
+        if not path:
+            return
+        default_name = os.path.basename(path) or path
+        name, ok = _simple_input_dialog(self, "添加文件夹", "显示名称：", default_name)
+        if not ok or not name.strip():
+            return
+        try:
+            from services.app_command_service import _save_custom_entries, _load_custom_entries
+            data = _load_custom_entries()
+            data["folders"][name.strip()] = {
+                "display_name": name.strip(),
+                "path":         path,
+                "source":       "user_custom",
+                "aliases":      [name.strip()],
+                "confidence":   1.0,
+            }
+            _save_custom_entries(data)
+            QMessageBox.information(self, "添加成功", f"已添加「{name.strip()}」")
+            self._load_discovery_into_ui()
+        except Exception as e:
+            QMessageBox.warning(self, "添加失败", str(e))
+
     def _build_bottom_bar(self) -> QWidget:
         bar = QWidget()
         bar.setObjectName("BottomBar")
@@ -514,6 +772,18 @@ class SettingsWindow(QWidget):
         self._blacklist_edit.setPlainText(
             _list_to_lines(behavior.get("blacklist_processes", []))
         )
+
+        # 语音配置（顶层字段）
+        self._voice_enabled_check.setChecked(bool(raw.get("voice_enabled", True)))
+        self._tts_enabled_check.setChecked(bool(raw.get("tts_enabled", True)))
+        tts_provider = raw.get("tts_provider", "edge")
+        tts_idx = self._tts_provider_box.findText(tts_provider)
+        self._tts_provider_box.setCurrentIndex(max(0, tts_idx))
+        self._tts_voice_edit.setText(raw.get("tts_voice", "zh-CN-XiaoxiaoNeural"))
+        self._tts_max_chars_spin.setValue(int(raw.get("tts_max_chars", 200)))
+        asr_provider = raw.get("asr_provider", "none")
+        asr_idx = self._asr_provider_box.findText(asr_provider)
+        self._asr_provider_box.setCurrentIndex(max(0, asr_idx))
 
         logger.debug("SettingsWindow：配置已加载到 UI")
 
@@ -629,6 +899,14 @@ class SettingsWindow(QWidget):
             self._quick_folders_edit.toPlainText()
         )
 
+        # 语音配置（顶层字段）
+        raw["voice_enabled"]  = self._voice_enabled_check.isChecked()
+        raw["tts_enabled"]    = self._tts_enabled_check.isChecked()
+        raw["tts_provider"]   = self._tts_provider_box.currentText()
+        raw["tts_voice"]      = self._tts_voice_edit.text().strip() or "zh-CN-XiaoxiaoNeural"
+        raw["tts_max_chars"]  = self._tts_max_chars_spin.value()
+        raw["asr_provider"]   = self._asr_provider_box.currentText()
+
         # ── 写入文件 ────────────────────────────────────────────
         try:
             _save_raw_config(raw)
@@ -726,6 +1004,26 @@ QComboBox QAbstractItemView {
 #TestAIButton:hover  { background-color: #3d4058; }
 #TestAIButton:pressed{ background-color: #282a36; }
 #TestAIButton:disabled { color: #6c7086; border-color: #6c7086; }
+#DiscoveryButton {
+    background-color: #313244;
+    color: #89dceb;
+    border: 1px solid #45475a;
+    border-radius: 8px;
+    padding: 0 10px;
+}
+#DiscoveryButton:hover  { background-color: #3d4058; border-color: #89dceb; }
+#DiscoveryButton:pressed{ background-color: #282a36; }
+#DiscoveryButton:disabled { color: #6c7086; }
+#DiscoveryTabs::pane { border: 1px solid #313244; border-radius: 4px; }
+#DiscoveryTabs QTabBar::tab {
+    background: #181825; color: #a6adc8;
+    padding: 4px 12px; border-radius: 4px 4px 0 0;
+}
+#DiscoveryTabs QTabBar::tab:selected { background: #313244; color: #cdd6f4; }
+QTableWidget { background: #181825; color: #cdd6f4;
+               gridline-color: #313244; border: none; }
+QHeaderView::section { background: #313244; color: #89b4fa;
+                        border: none; padding: 4px; }
 QScrollBar:vertical {
     background: #1e1e2e; width: 6px; border-radius: 3px;
 }
@@ -812,6 +1110,23 @@ QComboBox QAbstractItemView {
 #TestAIButton:hover  { background-color: #dce0e8; }
 #TestAIButton:pressed{ background-color: #ccd0da; }
 #TestAIButton:disabled { color: #9ca0b0; border-color: #9ca0b0; }
+#DiscoveryButton {
+    background-color: #e6e9ef; color: #179299;
+    border: 1px solid #ccd0da; border-radius: 8px; padding: 0 10px;
+}
+#DiscoveryButton:hover  { background-color: #dce0e8; border-color: #179299; }
+#DiscoveryButton:pressed{ background-color: #ccd0da; }
+#DiscoveryButton:disabled { color: #9ca0b0; }
+#DiscoveryTabs::pane { border: 1px solid #ccd0da; border-radius: 4px; }
+#DiscoveryTabs QTabBar::tab {
+    background: #e6e9ef; color: #6c6f85;
+    padding: 4px 12px; border-radius: 4px 4px 0 0;
+}
+#DiscoveryTabs QTabBar::tab:selected { background: #ffffff; color: #4c4f69; }
+QTableWidget { background: #ffffff; color: #4c4f69;
+               gridline-color: #ccd0da; border: none; }
+QHeaderView::section { background: #e6e9ef; color: #1e66f5;
+                        border: none; padding: 4px; }
 QScrollBar:vertical {
     background: #eff1f5; width: 6px; border-radius: 3px;
 }

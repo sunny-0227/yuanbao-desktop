@@ -143,5 +143,15 @@
     "save_dir": "%USERPROFILE%\\Pictures\\TutuAssistantScreenshots",
     "format": "png",
     "auto_open": false
-  }
+  },
+
+  "_comment_voice": "语音交互配置（第一阶段：TTS 播报 + 录音入口，ASR 默认 none）",
+  "voice_enabled": true,
+  "asr_provider": "none",
+  "tts_enabled": true,
+  "tts_provider": "edge",
+  "tts_voice": "zh-CN-XiaoxiaoNeural",
+  "tts_max_chars": 200,
+  "pause_mic_during_tts": true,
+  "mute_when_recording": false
 }

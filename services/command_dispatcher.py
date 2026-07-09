@@ -12,6 +12,7 @@
 
 from services.command_router import CommandRouter, CommandResult
 from services.app_command_service import AppCommandService
+from services.app_discovery_service import AppDiscoveryService
 from services.search_service import SearchService
 from services.note_service import NoteService
 from services.screenshot_service import ScreenshotService
@@ -48,7 +49,8 @@ class CommandDispatcher:
         todo_service: Optional[TodoService] = None,
     ):
         self._router         = CommandRouter()
-        self._app_cmd        = AppCommandService(config=config)
+        self._discovery      = AppDiscoveryService()
+        self._app_cmd        = AppCommandService(config=config, discovery=self._discovery)
         self._search_svc     = SearchService(
             config=config.search if config else None
         )
@@ -161,28 +163,17 @@ class CommandDispatcher:
         return self._monitor_svc.check_all()
 
     def _handle_quick_open(self, action: str, data: dict) -> str:
-        target = data.get("target_name", "")
+        target = data.get("target_name", "").strip()
 
-        if action == "open_folder":
-            return self._app_cmd.open_folder(target)
+        # 浏览器特殊处理（带 URL）
+        if data.get("app_action") == "open_browser":
+            return self._app_cmd.open_browser()
 
-        if action == "open_app":
-            # app_action 是规则文件中 app_aliases 对应的 action 字符串
-            app_action = data.get("app_action", "")
-            # 特殊：浏览器用专用方法（可带 URL）
-            if app_action == "open_browser":
-                return self._app_cmd.open_browser()
-            # 通用：把 target_name 当作应用名传入 open_app
-            return self._app_cmd.open_app(target)
+        if not target:
+            return "请告诉我要打开什么，例如：打开微信"
 
-        # open_unknown：target 未在配置中，尝试直接当应用名
-        if action == "open_unknown" and target:
-            result = self._app_cmd.open_app(target)
-            if "暂未找到" in result:
-                result = self._app_cmd.open_folder(target)
-            return result
-
-        return f"暂未找到「{target}」，请在 config.json 中添加对应配置。"
+        # 统一走 open_entry（内部按优先级：用户自定义 → config → app_index → 系统工具）
+        return self._app_cmd.open_entry(target)
 
     def _handle_todo(self, action: str, data: dict, raw_text: str) -> str:
         if action == "add_todo":

@@ -12,6 +12,7 @@
 """
 
 import os
+import json
 from typing import Callable, Optional, TYPE_CHECKING
 
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
@@ -70,10 +71,11 @@ class TrayMenu:
         self._tray = QSystemTrayIcon()
         self._config = config
         self._state_manager: Optional["StateManager"] = None
-        self._on_open_chat:     Optional[Callable] = None
-        self._on_show_pet:      Optional[Callable] = None
-        self._on_hide_pet:      Optional[Callable] = None
-        self._on_open_settings: Optional[Callable] = None   # 打开设置窗口的回调
+        self._on_open_chat:         Optional[Callable] = None
+        self._on_show_pet:          Optional[Callable] = None
+        self._on_hide_pet:          Optional[Callable] = None
+        self._on_open_settings:     Optional[Callable] = None
+        self._on_voice_input:       Optional[Callable] = None   # 触发语音输入
 
         self._init_icon()
         self._init_menu()
@@ -99,12 +101,23 @@ class TrayMenu:
         menu = QMenu()
 
         # ── 菜单项定义 ──────────────────────────────────────
-        self._act_open_chat = menu.addAction("打开对话")
-        self._act_settings  = menu.addAction("打开设置")   # 新增设置入口
+        self._act_open_chat   = menu.addAction("打开对话")
+        self._act_voice_input = menu.addAction("🎤 语音对话")
+        self._act_settings    = menu.addAction("打开设置")
         menu.addSeparator()
 
         self._act_show = menu.addAction("显示助手")
         self._act_hide = menu.addAction("隐藏助手")
+        menu.addSeparator()
+
+        # 语音播报开关（Checkable）
+        self._act_tts_toggle = menu.addAction("🔊 语音播报")
+        self._act_tts_toggle.setCheckable(True)
+        tts_on = True
+        if self._config and hasattr(self._config, "voice"):
+            tts_on = self._config.voice.tts_enabled
+        self._act_tts_toggle.setChecked(tts_on)
+
         menu.addSeparator()
 
         self._act_sleep = menu.addAction("进入休眠")
@@ -115,9 +128,11 @@ class TrayMenu:
 
         # ── 连接信号 ────────────────────────────────────────
         self._act_open_chat.triggered.connect(self._handle_open_chat)
+        self._act_voice_input.triggered.connect(self._handle_voice_input)
         self._act_settings.triggered.connect(self._handle_open_settings)
         self._act_show.triggered.connect(self._handle_show_pet)
         self._act_hide.triggered.connect(self._handle_hide_pet)
+        self._act_tts_toggle.triggered.connect(self._handle_tts_toggle)
         self._act_sleep.triggered.connect(self._handle_sleep)
         self._act_wake.triggered.connect(self._handle_wake)
         self._act_quit.triggered.connect(self._handle_quit)
@@ -141,16 +156,17 @@ class TrayMenu:
         on_show_pet:      Optional[Callable] = None,
         on_hide_pet:      Optional[Callable] = None,
         on_open_settings: Optional[Callable] = None,
+        on_voice_input:   Optional[Callable] = None,
     ):
         """
-        注册显示类菜单项的回调函数，全部可选。
-        未注册的菜单项点击时只记录日志，不崩溃。
-        注意：on_sleep / on_wake 已移入 StateManager，不再接受外部回调。
+        注册菜单项回调函数，全部可选。
+        on_voice_input：点击「语音对话」时触发（通常委托给 ChatWindow.trigger_voice_input）
         """
         self._on_open_chat     = on_open_chat
         self._on_show_pet      = on_show_pet
         self._on_hide_pet      = on_hide_pet
         self._on_open_settings = on_open_settings
+        self._on_voice_input   = on_voice_input
 
     def show(self):
         """显示托盘图标"""
@@ -183,6 +199,32 @@ class TrayMenu:
     def _handle_open_settings(self):
         self._invoke("打开设置", self._on_open_settings)
 
+    def _handle_voice_input(self):
+        """触发语音对话：先打开聊天窗口再启动录音"""
+        self._invoke("语音对话", self._on_voice_input)
+
+    def _handle_tts_toggle(self, checked: bool):
+        """切换语音播报开关，并持久化到 config.json"""
+        logger.debug(f"托盘菜单：语音播报 → {'开启' if checked else '关闭'}")
+        if self._config and hasattr(self._config, "voice"):
+            self._config.voice.tts_enabled = checked
+        # 持久化到 config.json
+        try:
+            from app.app_context import resource_path
+            cfg_path = resource_path("config.json")
+            import json as _json
+            if os.path.exists(cfg_path):
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    raw = _json.load(f)
+            else:
+                raw = {}
+            raw["tts_enabled"] = checked
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                _json.dump(raw, f, ensure_ascii=False, indent=2)
+            logger.debug(f"tts_enabled={checked} 已写入 config.json")
+        except Exception as e:
+            logger.warning(f"托盘菜单：写入 tts_enabled 失败：{e}")
+
     def _handle_show_pet(self):
         self._invoke("显示助手", self._on_show_pet)
 
@@ -213,20 +255,25 @@ class TrayMenu:
 
     # ── 公开通知方法 ──────────────────────────────────────────
 
-    def show_sleep_notification(self):
+    def show_sleep_notification(self, message: str = ""):
         """
-        在系统托盘气泡中提示用户助手已进入休眠模式。
-        仅在系统支持气泡通知时显示（不支持时静默忽略）。
+        在系统托盘气泡中显示通知。
+        message 为空时显示默认休眠提示。
         """
         if not self._tray.isSystemTrayAvailable():
             return
         try:
+            if message:
+                title = "图图助手"
+                body  = message
+            else:
+                title = "检测到高负载"
+                body  = "助手已进入休眠模式，点击托盘图标可恢复工作。"
             self._tray.showMessage(
-                "检测到高负载",
-                "助手已进入休眠模式，点击托盘图标可恢复工作。",
+                title, body,
                 QSystemTrayIcon.MessageIcon.Information,
-                4000,   # 显示 4 秒
+                4000,
             )
-            logger.debug("已显示休眠通知气泡")
+            logger.debug(f"托盘通知：{body[:40]}")
         except Exception as e:
             logger.warning(f"显示托盘通知失败：{e}")
