@@ -72,7 +72,7 @@ def main():
         pet.deleteLater()
         reminder.deleteLater()
         app.processEvents()
-    print("Windows 界面结构检查通过")
+    print("Windows UI smoke checks passed")
 
 
 if __name__ == "__main__":
