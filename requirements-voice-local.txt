@@ -1,0 +1,4 @@
+-r requirements-voice.txt
+# 模型需另行准备；安装依赖不会把模型打进 exe。
+faster-whisper>=1.1,<2
+vosk>=0.3.45,<0.4

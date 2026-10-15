@@ -15,14 +15,14 @@
 - AppDiscoveryService 以可选依赖方式注入（非必须）。
 """
 
-import os
 import json
+import os
 import subprocess
 import webbrowser
 from typing import Optional
 
-from app.config import AppConfig
 from app.app_context import data_path
+from app.config import AppConfig
 from app.logger import setup_logger
 from app.utils import is_windows
 
@@ -33,6 +33,7 @@ _CUSTOM_FILE = "user_custom_entries.json"
 
 
 # ── 私有辅助函数 ──────────────────────────────────────────────
+
 
 def _startfile(target: str) -> None:
     """调用 os.startfile（仅 Windows 有此函数）"""
@@ -47,19 +48,18 @@ def _expand(path: str) -> str:
     return os.path.normpath(os.path.expandvars(path))
 
 
-def _launch_exe(command: str, display_name: str,
-                arguments: str = "", working_dir: str = "") -> str:
+def _launch_exe(command: str, display_name: str, arguments: str = "", working_dir: str = "") -> str:
     """
     启动一个应用程序。
     - arguments 不为空时通过 subprocess.Popen 传递。
     - working_dir 不为空时设置 cwd。
     策略：先尝试 os.startfile（无参数时），失败则回退到 subprocess.Popen。
     """
-    cmd_expanded   = _expand(command)
-    work_expanded  = _expand(working_dir) if working_dir else None
+    cmd_expanded = _expand(command)
+    work_expanded = _expand(working_dir) if working_dir else None
 
     # 路径存在性检查（系统命令如 calc.exe 跳过）
-    is_system_cmd = not os.sep in command and not (":" in command)
+    is_system_cmd = os.sep not in command and ":" not in command
     if not is_system_cmd and not os.path.exists(cmd_expanded):
         logger.warning(f"程序文件不存在：{cmd_expanded}")
         return (
@@ -71,7 +71,7 @@ def _launch_exe(command: str, display_name: str,
     # 有参数时必须用 Popen
     if arguments:
         try:
-            args = [cmd_expanded] + arguments.split()
+            args = subprocess.list2cmdline([cmd_expanded]) + " " + arguments
             kw: dict = {"shell": False}
             if work_expanded and os.path.isdir(work_expanded):
                 kw["cwd"] = work_expanded
@@ -96,10 +96,7 @@ def _launch_exe(command: str, display_name: str,
         return f"{display_name} 已打开。"
     except FileNotFoundError:
         logger.warning(f"找不到可执行文件：{cmd_expanded}")
-        return (
-            f"⚠️ 找不到「{display_name}」，"
-            "请在设置中手动添加，或点击重新识别常用入口。"
-        )
+        return f"⚠️ 找不到「{display_name}」，请在设置中手动添加，或点击重新识别常用入口。"
     except Exception as e2:
         logger.error(f"启动 {display_name} 失败：{e2}")
         return f"⚠️ 打开「{display_name}」失败：{e2}"
@@ -133,6 +130,7 @@ def _open_folder_path(path: str, display_name: str) -> str:
 
 # ── 用户自定义条目读取 ────────────────────────────────────────
 
+
 def _load_custom_entries() -> dict:
     """读取 data/user_custom_entries.json"""
     path = data_path(_CUSTOM_FILE)
@@ -149,15 +147,8 @@ def _load_custom_entries() -> dict:
         return {"apps": {}, "folders": {}, "websites": {}}
 
 
-def _save_custom_entries(data: dict) -> None:
-    """保存 data/user_custom_entries.json"""
-    path = data_path(_CUSTOM_FILE)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
 # ── 服务类 ────────────────────────────────────────────────────
+
 
 class AppCommandService:
     """
@@ -172,19 +163,19 @@ class AppCommandService:
     def __init__(
         self,
         config: Optional[AppConfig] = None,
-        discovery=None,   # AppDiscoveryService 可选注入，避免循环导入
+        discovery=None,  # AppDiscoveryService 可选注入，避免循环导入
     ):
-        self._config    = config
+        self._config = config
         self._discovery = discovery
 
         # config 快速查找表（不区分大小写）
-        self._cfg_app_map:    dict[str, dict] = {}
+        self._cfg_app_map: dict[str, dict] = {}
         self._cfg_folder_map: dict[str, dict] = {}
         self._rebuild_config_maps()
 
     def _rebuild_config_maps(self):
         """从 config 构建快速查找表"""
-        self._cfg_app_map    = {}
+        self._cfg_app_map = {}
         self._cfg_folder_map = {}
         if not self._config:
             return
@@ -221,24 +212,24 @@ class AppCommandService:
 
         # ── 2. config.json quick_apps ─────────────────────────
         for map_key, item in self._cfg_app_map.items():
-            if key == map_key or key in map_key or map_key in key:
+            if key == map_key:
                 return {
-                    "category":     "apps",
+                    "category": "apps",
                     "display_name": item.get("name", name),
-                    "path":         item.get("command", ""),
-                    "arguments":    item.get("arguments", ""),
-                    "working_dir":  item.get("working_dir", ""),
-                    "source":       "config",
+                    "path": item.get("command", ""),
+                    "arguments": item.get("arguments", ""),
+                    "working_dir": item.get("working_dir", ""),
+                    "source": "config",
                 }
 
         # config.json quick_folders
         for map_key, item in self._cfg_folder_map.items():
-            if key == map_key or key in map_key or map_key in key:
+            if key == map_key:
                 return {
-                    "category":     "folders",
+                    "category": "folders",
                     "display_name": item.get("name", name),
-                    "path":         item.get("path", ""),
-                    "source":       "config",
+                    "path": item.get("path", ""),
+                    "source": "config",
                 }
 
         # ── 3. app_index.json ─────────────────────────────────
@@ -284,38 +275,16 @@ class AppCommandService:
             return _open_folder_path(path, display)
 
         if category == "system_tools":
-            cmd     = entry.get("command", "")
+            cmd = entry.get("command", "")
             display = entry.get("display_name", name)
             return _launch_exe(cmd, display)
 
         # apps
-        path      = entry.get("path", "")
-        display   = entry.get("display_name", name)
+        path = entry.get("path", "")
+        display = entry.get("display_name", name)
         arguments = entry.get("arguments", "")
-        working   = entry.get("working_dir", "")
+        working = entry.get("working_dir", "")
         return _launch_exe(path, display, arguments, working)
-
-    def open_app(self, app_name: str) -> str:
-        """按名称打开应用（向后兼容接口）"""
-        return self.open_entry(app_name)
-
-    def open_folder(self, folder_name: str) -> str:
-        """按名称打开文件夹（向后兼容接口）"""
-        if not is_windows():
-            return _NOT_WIN_MSG
-
-        entry = self._lookup(folder_name)
-        if entry and entry.get("category") == "folders":
-            return _open_folder_path(
-                entry.get("path", ""),
-                entry.get("display_name", folder_name)
-            )
-        if entry and entry.get("category") == "apps":
-            # 用户说"打开下载"，可能在 app_index 里被识别成 app，再试文件夹查找
-            pass
-
-        # 如果 _lookup 没有命中文件夹，直接回退 open_entry
-        return self.open_entry(folder_name)
 
     def open_browser(self, url: str = "") -> str:
         """打开系统默认浏览器，可选传入目标 URL"""
@@ -326,58 +295,3 @@ class AppCommandService:
         except Exception as e:
             logger.error(f"打开浏览器失败：{e}")
             return f"⚠️ 打开浏览器失败：{e}"
-
-    # ── 用户自定义条目管理 ────────────────────────────────────
-
-    def add_custom_app(self, display_name: str, path: str) -> str:
-        """手动添加软件到 user_custom_entries.json"""
-        try:
-            data = _load_custom_entries()
-            data["apps"][display_name] = {
-                "display_name": display_name,
-                "path":         path,
-                "arguments":    "",
-                "working_dir":  "",
-                "source":       "user_custom",
-                "aliases":      [display_name],
-                "confidence":   1.0,
-            }
-            _save_custom_entries(data)
-            return f"已添加软件「{display_name}」，路径：{path}"
-        except Exception as e:
-            logger.error(f"添加自定义软件失败：{e}")
-            return f"⚠️ 添加失败：{e}"
-
-    def add_custom_folder(self, display_name: str, path: str) -> str:
-        """手动添加文件夹到 user_custom_entries.json"""
-        try:
-            data = _load_custom_entries()
-            data["folders"][display_name] = {
-                "display_name": display_name,
-                "path":         path,
-                "source":       "user_custom",
-                "aliases":      [display_name],
-                "confidence":   1.0,
-            }
-            _save_custom_entries(data)
-            return f"已添加文件夹「{display_name}」，路径：{path}"
-        except Exception as e:
-            logger.error(f"添加自定义文件夹失败：{e}")
-            return f"⚠️ 添加失败：{e}"
-
-    # ── 兼容旧方法 ────────────────────────────────────────────
-
-    def open_notepad(self) -> str:
-        return self.open_entry("记事本")
-
-    def open_calculator(self) -> str:
-        return self.open_entry("计算器")
-
-    def open_wechat(self) -> str:
-        return self.open_entry("微信")
-
-    def open_word(self) -> str:
-        return self.open_entry("Word")
-
-    def open_excel(self) -> str:
-        return self.open_entry("Excel")

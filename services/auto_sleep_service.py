@@ -1,139 +1,132 @@
-"""
-自动休眠检测服务
-每隔固定周期（由 main.py 中的 QTimer 驱动）检查系统资源状态，
-根据配置决定是否自动将助手切换到 sleep 或 idle 状态。
+"""非阻塞资源采样、连续高负载判断与恢复迟滞。"""
 
-检测规则（优先级从高到低）：
-  1. sleep（高负载）：CPU 占用 > cpu_sleep_threshold
-  2. sleep（黑名单进程）：blacklist_processes 中的进程正在运行
-  3. idle（长时间无操作）：超过 idle_sleep_minutes 无用户交互
-  4. 否则维持当前状态，不做切换
+import ctypes
+from concurrent.futures import ThreadPoolExecutor
 
-设计原则：
-  - 不包含任何 UI 逻辑，只负责判断并调用 StateManager.set_state()
-  - 所有 psutil 调用已在 MonitorService 内部异常捕获，不会向上抛出
-  - sleep 触发时通过回调通知外部（如托盘弹窗），与 UI 解耦
-  - 已处于 sleep 状态时不重复触发通知
-"""
-
-from typing import Callable, Optional, TYPE_CHECKING
-
-from services.monitor_service import MonitorService
-from app.logger import setup_logger
-
-if TYPE_CHECKING:
-    from app.config import BehaviorConfig
-    from app.state_manager import StateManager
-
-logger = setup_logger()
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 
-class AutoSleepService:
-    """
-    自动休眠检测服务。
+def snapshot():
+    import psutil
 
-    使用方式（在 main.py 中）：
-        svc = AutoSleepService(
-            state_manager=state_manager,
-            config=app_config.behavior,
-        )
-        svc.set_sleep_notify_callback(tray.show_sleep_notification)
+    from app.utils import is_windows
 
-        _timer = QTimer()
-        _timer.setInterval(10 * 1000)          # 每 10 秒检测一次
-        _timer.timeout.connect(svc.check)
-        _timer.start()
-    """
+    result = {
+        "cpu": psutil.cpu_percent(interval=0.1),
+        "processes": [],
+        "foreground": "",
+        "system_idle": None,
+    }
+    result["processes"] = [
+        p.info["name"].lower() for p in psutil.process_iter(["name"]) if p.info["name"]
+    ]
+    if is_windows():
 
-    def __init__(
-        self,
-        state_manager: "StateManager",
-        config: Optional["BehaviorConfig"] = None,
-    ):
-        self._state_manager = state_manager
-        self._config        = config
-        self._monitor       = MonitorService()
-        # sleep 通知回调（仅在状态"首次进入 sleep"时触发）
-        self._sleep_notify_cb: Optional[Callable[[], None]] = None
+        class LastInput(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
 
-    # ── 公开接口 ─────────────────────────────────────────────
+        info = LastInput(ctypes.sizeof(LastInput), 0)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            ticks = ctypes.windll.kernel32.GetTickCount()
+            result["system_idle"] = ((ticks - info.dwTime) & 0xFFFFFFFF) / 1000
+        from app.windows import user32_api
 
-    def set_sleep_notify_callback(self, callback: Callable[[], None]):
-        """
-        注册 sleep 通知回调，进入 sleep 时调用一次。
-        签名：callback() → None
-        """
-        self._sleep_notify_cb = callback
+        user32 = user32_api()
+        pid = ctypes.c_ulong()
+        hwnd = user32.GetForegroundWindow()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        try:
+            result["foreground"] = psutil.Process(pid.value).name().lower()
+        except psutil.Error:
+            pass
+    return result
+
+
+class AutoSleepService(QObject):
+    sampled = Signal(object)
+    error = Signal(str)
+
+    def __init__(self, state_manager, config, parent=None):
+        super().__init__(parent)
+        self.state_manager, self.config = state_manager, config
+        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="YuanbaoMonitor")
+        self.busy = False
+        self.high_samples = 0
+        self.last_cpu = 0
+        self.recovery_samples = 0
+        self.closed = False
+        self.timer = QTimer(self)
+        self.timer.setInterval(10000)
+        self.timer.timeout.connect(self.check)
+        self.sampled.connect(self.evaluate)
+        self.timer.start()
 
     def check(self):
-        """
-        执行一次资源检测，根据结果切换状态。
-        由 QTimer.timeout 信号驱动，每 10 秒调用一次。
-        """
-        try:
-            self._do_check()
-        except Exception as e:
-            # 检测本身出错不影响主程序运行
-            logger.error(f"AutoSleepService.check 异常：{e}")
-
-    # ── 私有逻辑 ──────────────────────────────────────────────
-
-    def _do_check(self):
-        """核心检测逻辑，抛出的异常由 check() 捕获"""
-        cfg             = self._config
-        current_state   = self._state_manager.get_state()
-
-        # ── 从 config 读取阈值，未配置时用安全默认值 ───────────
-        cpu_threshold      = getattr(cfg, "cpu_sleep_threshold", 80)    # CPU 阈值（%）
-        idle_minutes       = getattr(cfg, "idle_sleep_minutes",  10)    # 空闲分钟数
-        blacklist: list    = getattr(cfg, "blacklist_processes",  [])   # 黑名单进程列表
-
-        # ── 规则1：CPU 超阈值 → sleep ──────────────────────────
-        cpu = self._monitor.get_cpu_percent()
-        if cpu is not None and cpu > cpu_threshold:
-            reason = f"CPU 占用 {cpu:.0f}% 超过阈值 {cpu_threshold}%"
-            self._trigger_sleep(reason)
+        if (
+            self.busy
+            or self.closed
+            or not self.config.auto_sleep_enabled
+            or self.state_manager.manual_sleep
+        ):
             return
+        self.busy = True
 
-        # ── 规则2：黑名单进程运行 → sleep ──────────────────────
-        if blacklist:
-            running = self._monitor.get_running_processes()  # 全部小写
-            for proc_name in blacklist:
-                if proc_name.lower() in running:
-                    reason = f"检测到黑名单进程：{proc_name}"
-                    self._trigger_sleep(reason)
-                    return
+        def work():
+            try:
+                self.sampled.emit(snapshot())
+            except Exception as exc:
+                self.sampled.emit({"error": str(exc)})
 
-        # ── 若当前处于 sleep 且触发条件解除，切回 idle ──────────
-        # （由用户主动操作触发 active；此处仅在条件解除时退出 sleep）
-        if current_state == "sleep":
-            logger.debug("AutoSleepService：sleep 触发条件已解除，切回 idle")
-            self._state_manager.set_state("idle")
+        self.pool.submit(work)
+
+    @Slot(object)
+    def evaluate(self, value):
+        self.busy = False
+        if self.closed or not self.config.auto_sleep_enabled or self.state_manager.manual_sleep:
             return
-
-        # ── 规则3：长时间无操作 → idle ─────────────────────────
-        # 仅当前状态为 active 时才降级到 idle（不覆盖手动 sleep）
-        if current_state == "active":
-            if self._state_manager.is_idle_timeout(idle_minutes):
-                logger.info(
-                    f"超过 {idle_minutes} 分钟无交互，自动进入 idle"
-                )
-                self._state_manager.set_state("idle")
-
-    def _trigger_sleep(self, reason: str):
-        """
-        触发 sleep 状态切换，并在"首次"进入时触发通知回调。
-        重复触发（原因相同）时不重复弹窗。
-        """
-        changed = self._state_manager.set_state("sleep")
-
-        if changed:
-            logger.info(f"自动进入 sleep：{reason}")
-            if self._sleep_notify_cb:
-                try:
-                    self._sleep_notify_cb()
-                except Exception as e:
-                    logger.error(f"sleep 通知回调异常：{e}")
+        if "error" in value:
+            self.error.emit(value["error"])
+            return
+        self.last_cpu = value["cpu"]
+        threshold = self.config.cpu_sleep_threshold
+        running = set(value["processes"])
+        white = {p.lower() for p in self.config.whitelist_processes}
+        black = {p.lower() for p in self.config.blacklist_processes} - white
+        hit = bool(black & running)
+        self.high_samples = self.high_samples + 1 if value["cpu"] > threshold else 0
+        if hit or self.high_samples >= 2:
+            self.state_manager.set_state(
+                "sleep", reason="检测到黑名单软件" if hit else "持续高负载"
+            )
+            self.recovery_samples = 0
+        elif self.state_manager.get_state() == "sleep":
+            self.recovery_samples = (
+                self.recovery_samples + 1 if value["cpu"] < threshold - 10 and not hit else 0
+            )
+            if self.recovery_samples >= 2:
+                self.state_manager.set_state("idle", reason="系统负载已恢复")
         else:
-            # 已处于 sleep，不重复通知
-            logger.debug(f"保持 sleep（{reason}）")
+            minutes = self.config.idle_sleep_minutes
+            idle = self.state_manager.is_idle_timeout(minutes)
+            if value["system_idle"] is not None and minutes > 0:
+                idle = idle and value["system_idle"] >= minutes * 60
+            if idle:
+                self.state_manager.set_state("idle", reason="长时间无交互")
+            elif (
+                self.state_manager.get_state() == "idle"
+                and value["system_idle"] is not None
+                and value["system_idle"] < 2
+            ):
+                self.state_manager.touch_interaction()
+        # 休眠仍保留低频守护检测，否则无法自动恢复。
+        self.timer.setInterval(30000 if self.state_manager.get_state() == "sleep" else 10000)
+
+    def update_config(self, config):
+        self.config = config
+        if not config.auto_sleep_enabled and not self.state_manager.manual_sleep:
+            self.state_manager.touch_interaction()
+
+    def shutdown(self):
+        self.closed = True
+        self.timer.stop()
+        self.pool.shutdown(wait=True, cancel_futures=True)

@@ -1,30 +1,6 @@
-# 基础依赖（跨平台，Mac/Windows 均可安装）
-# 在 Mac 上开发时使用此文件
-# 安装命令：pip install -r requirements-base.txt
-
-# GUI 框架
-PySide6>=6.7.0
-
-# AI 接口 HTTP 客户端（兼容 OpenAI Chat Completions 格式）
-httpx>=0.27.0
-
-# 系统资源监测（CPU / 内存 / 磁盘 / 进程列表）
-psutil>=5.9.0
-
-# 截图功能（ImageGrab）
-Pillow>=10.0.0
-
-# 环境变量加载（读取 .env 中的 AI API Key 等）
-python-dotenv>=1.0.0
-
-# ── 语音功能依赖 ──────────────────────────────────────────────────────────────
-# TTS 播报（edge-tts：在线中文语音，效果好）
-edge-tts>=6.1.0
-# TTS 播报（pyttsx3：离线降级方案，edge-tts 不可用时使用）
-pyttsx3>=2.90
-# TTS 播报时用于播放 mp3（edge-tts 输出 mp3，pygame 负责播放）
-pygame>=2.5.0
-# 语音录音（sounddevice：比 pyaudio 更易安装，跨平台）
-sounddevice>=0.4.6
-# 录音数据处理（numpy 数组转 bytes 写入 wav）
-numpy>=1.24.0
+# 核心桌面依赖：不引入 WebEngine、Whisper 或音频模型。
+PySide6-Essentials>=6.7,<6.13
+httpx>=0.27,<0.29
+psutil>=5.9,<8
+python-dotenv>=1,<2
+Pillow>=10,<13

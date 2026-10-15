@@ -1,49 +1,68 @@
 {
-  "_comment": "图图助手配置文件。敏感字段（AI API Key）请在 .env 中配置，不要写在这里。路径支持 Windows 环境变量，如 %USERPROFILE%。",
-
-  "app_name": "轻量化桌面AI效率助手",
-  "pet_name": "图图助手",
+  "app_name": "元宝桌面助手",
+  "pet_name": "元宝",
   "log_level": "INFO",
-
   "ai": {
     "provider": "freellmapi",
-    "_comment_provider": "可选值：none（禁用AI）/ direct（直连OpenAI等）/ freellmapi（本地代理）",
     "api_key": "",
-    "_comment_key": "留空，请在 .env 文件中配置 AI_API_KEY",
     "base_url": "",
-    "_comment_url": "留空则使用 .env 中的 AI_API_BASE_URL；FreeLLMAPI 默认为 http://localhost:3001/v1",
     "model": "auto",
-    "_comment_model": "FreeLLMAPI 使用 auto；OpenAI 可填 gpt-4o-mini；DeepSeek 填 deepseek-chat",
     "temperature": 0.7,
     "max_tokens": 1024,
-    "system_prompt": "你是一个专注于日常办公、学习和资料处理的桌面AI效率助手，名叫图图助手。请用简洁自然的中文回答问题，优先给出可操作的建议。",
-    "enable_ai_cache": true
+    "system_prompt": "你是一个专注于日常办公、学习和资料处理的桌面AI效率助手，名叫元宝，形象是一只长毛金虎斑猫。请用简洁自然的中文回答问题，优先给出可操作的建议。",
+    "enable_ai_cache": false
   },
-
   "ui": {
-    "theme": "dark",
+    "theme": "light",
     "font_size": 14,
-    "window_width": 460,
-    "window_height": 660,
-    "always_on_top": false
+    "window_width": 1000,
+    "window_height": 740,
+    "always_on_top": false,
+    "pet_size": 120,
+    "pet_opacity": 0.95,
+    "pet_skin": "default",
+    "pet_visible": true,
+    "pet_x": -1,
+    "pet_y": -1,
+    "edge_collapse": true,
+    "autostart": false
   },
-
   "behavior": {
-    "idle_sleep_minutes": 10,
+    "idle_sleep_minutes": 5,
+    "auto_sleep_enabled": true,
+    "whitelist_processes": [],
     "cpu_sleep_threshold": 80,
-    "_comment_blacklist": "填写需要触发休眠的进程名（如游戏进程 steam.exe），留空则不启用黑名单检测",
     "blacklist_processes": []
   },
-
   "search": {
     "engine": "bing",
     "engines": {
-      "bing":   "https://www.bing.com/search?q=",
-      "baidu":  "https://www.baidu.com/s?wd=",
+      "bing": "https://www.bing.com/search?q=",
+      "baidu": "https://www.baidu.com/s?wd=",
       "google": "https://www.google.com/search?q="
     }
   },
-
+  "screenshot": {
+    "save_dir": "%USERPROFILE%\\Pictures\\YuanbaoScreenshots",
+    "format": "png",
+    "auto_open": false
+  },
+  "voice": {
+    "input_device": "",
+    "wake_enabled": false,
+    "wake_word": "元宝元宝",
+    "wake_model_path": "",
+    "asr_url": "",
+    "asr_key": "",
+    "asr_model": "whisper-1",
+    "offline_model": "tiny",
+    "voice_enabled": false,
+    "asr_provider": "none",
+    "tts_enabled": false,
+    "tts_provider": "edge",
+    "tts_voice": "zh-CN-XiaoxiaoNeural",
+    "tts_max_chars": 200
+  },
   "quick_apps": [
     {
       "name": "浏览器",
@@ -101,7 +120,6 @@
       "_comment": "VS Code 默认安装路径"
     }
   ],
-
   "quick_folders": [
     {
       "name": "桌面",
@@ -130,28 +148,15 @@
     },
     {
       "name": "截图",
-      "path": "%USERPROFILE%\\Pictures\\TutuAssistantScreenshots",
+      "path": "%USERPROFILE%\\Pictures\\YuanbaoScreenshots",
       "_comment": "与 screenshot.save_dir 保持一致"
     },
     {
       "name": "截图目录",
-      "path": "%USERPROFILE%\\Pictures\\TutuAssistantScreenshots"
+      "path": "%USERPROFILE%\\Pictures\\YuanbaoScreenshots"
     }
   ],
-
-  "screenshot": {
-    "save_dir": "%USERPROFILE%\\Pictures\\TutuAssistantScreenshots",
-    "format": "png",
-    "auto_open": false
-  },
-
-  "_comment_voice": "语音交互配置（第一阶段：TTS 播报 + 录音入口，ASR 默认 none）",
-  "voice_enabled": true,
-  "asr_provider": "none",
-  "tts_enabled": true,
-  "tts_provider": "edge",
-  "tts_voice": "zh-CN-XiaoxiaoNeural",
-  "tts_max_chars": 200,
-  "pause_mic_during_tts": true,
-  "mute_when_recording": false
+  "ai_endpoints": [],
+  "offline_ai_url": "",
+  "offline_ai_model": ""
 }

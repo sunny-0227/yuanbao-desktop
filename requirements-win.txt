@@ -1,14 +1,5 @@
-# Windows 专属依赖（只在 Windows 上安装）
-# 安装命令：pip install -r requirements-win.txt
-#
-# 注意：此文件中的包依赖 Windows API，不能在 Mac/Linux 上安装。
-# Mac 开发时只需安装 requirements-base.txt。
-
-# 打包工具（生成 exe）
-pyinstaller>=6.8.0
-
-# Windows 系统音量控制（VolumeService 使用）
-pycaw>=20181226
-
-# COM 组件支持（pycaw 依赖）
-comtypes>=1.4.0
+# 仅 Windows。
+pyinstaller>=6.8,<7
+pycaw>=20240210
+comtypes>=1.4,<2
+pywin32>=306

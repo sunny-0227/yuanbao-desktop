@@ -1,0 +1,11 @@
+"""统一产品名称；旧标识只用于已有安装兼容。"""
+
+APP_NAME = "元宝桌面助手"
+PET_NAME = "元宝"
+APP_ID = "Yuanbao"
+ORGANIZATION = "YuanbaoDesktop"
+PROJECT_SLUG = "yuanbao-desktop"
+CHARACTER = "长毛金虎斑猫"
+DATA_ENV = "YUANBAO_DATA_DIR"
+LEGACY_APP_ID = "TutuAssistant"
+LEGACY_DATA_ENV = "TUTU_DATA_DIR"

@@ -1,0 +1,14 @@
+{
+  "source": "joyai_video_2026-10-14_169970.mp4",
+  "source_sha256": "150618bd817d005d280a0c8eb5390acca6dfc125f4c8307133955b3a4081110d",
+  "filter": "trim=start_frame=4,setpts=PTS-STARTPTS,fps=12,format=rgba,colorkey=0x0785BA:0.26:0.06,scale=400:400,pad=480:480:40:40:color=black@0",
+  "frames": 59,
+  "fps": 12,
+  "size": [
+    480,
+    480
+  ],
+  "playback": "ping-pong",
+  "pause_ms": 4000,
+  "note": "正放再倒放，端点不重复；开头多去掉一帧作为背景切换缓冲。"
+}

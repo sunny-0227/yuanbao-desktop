@@ -1,71 +1,61 @@
-"""
-聊天历史持久化服务
-将对话记录保存到本地 JSON 文件，支持加载历史会话（预留接口，第一版不强制使用）
-"""
+"""会话保存、恢复与上下文窗口。"""
 
-import json
-import os
+import uuid
 from datetime import datetime
-from typing import Optional
 
-from app.app_context import resource_path, data_path
-from app.logger import setup_logger
-
-logger = setup_logger()
-
-HISTORY_FILE = "chat_history.json"
+from app.storage import Database
 
 
 class ChatHistory:
-    """
-    简单的对话历史管理器。
-    每次会话保存为独立条目，存储在 data/chat_history.json 中。
-    """
+    def __init__(self, db=None):
+        self.db = db or Database()
 
-    def __init__(self):
-        self.file_path = data_path(os.path.join("data", HISTORY_FILE))
+    def create(self, title="新对话"):
+        ident = uuid.uuid4().hex
+        with self.db.connect() as conn:
+            conn.execute(
+                "INSERT INTO sessions VALUES (?,?,?)", (ident, title, datetime.now().isoformat())
+            )
+        return ident
 
-    def save_session(self, messages: list[dict]) -> bool:
-        """
-        保存当前会话到文件。
-        返回是否保存成功。
-        """
-        if not messages:
-            return False
+    def sessions(self):
+        with self.db.connect() as conn:
+            return [
+                dict(r) for r in conn.execute("SELECT * FROM sessions ORDER BY created_at DESC")
+            ]
 
-        try:
-            history = self._load_raw()
-            session = {
-                "timestamp": datetime.now().isoformat(),
-                "messages": messages,
-            }
-            history.append(session)
+    def append(self, session_id, role, content):
+        with self.db.connect() as conn:
+            if role == "user":
+                conn.execute(
+                    "UPDATE sessions SET title=? WHERE id=? AND title='新对话'",
+                    (content[:24], session_id),
+                )
+            conn.execute(
+                "INSERT INTO messages(session_id,role,content,created_at) VALUES (?,?,?,?)",
+                (session_id, role, content, datetime.now().isoformat()),
+            )
 
-            os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
-            with open(self.file_path, "w", encoding="utf-8") as f:
-                json.dump(history, f, ensure_ascii=False, indent=2)
+    def messages(self, session_id):
+        with self.db.connect() as conn:
+            return [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT role,content FROM messages WHERE session_id=? ORDER BY id",
+                    (session_id,),
+                )
+            ]
 
-            logger.info(f"聊天记录已保存，共 {len(messages)} 条消息")
-            return True
+    def context(self, session_id, max_chars=16000):
+        chosen, size = [], 0
+        for row in reversed(self.messages(session_id)):
+            if size + len(row["content"]) > max_chars and chosen:
+                break
+            chosen.append(row)
+            size += len(row["content"])
+        return list(reversed(chosen))
 
-        except Exception as e:
-            logger.error(f"保存聊天记录失败：{e}")
-            return False
-
-    def load_last_session(self) -> list[dict]:
-        """加载最近一次会话的消息列表，找不到则返回空列表"""
-        history = self._load_raw()
-        if history:
-            return history[-1].get("messages", [])
-        return []
-
-    def _load_raw(self) -> list:
-        """从文件读取原始历史数据"""
-        if not os.path.exists(self.file_path):
-            return []
-        try:
-            with open(self.file_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            logger.warning(f"读取聊天历史失败：{e}")
-            return []
+    def delete(self, ident):
+        with self.db.connect() as conn:
+            conn.execute("DELETE FROM messages WHERE session_id=?", (ident,))
+            conn.execute("DELETE FROM sessions WHERE id=?", (ident,))

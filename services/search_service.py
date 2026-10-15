@@ -10,8 +10,8 @@
 """
 
 import webbrowser
-from urllib.parse import quote
 from typing import Optional
+from urllib.parse import quote
 
 from app.config import SearchConfig
 from app.logger import setup_logger
@@ -20,8 +20,8 @@ logger = setup_logger()
 
 # 内置兜底引擎配置，当 config 未传入时使用
 _DEFAULT_ENGINES: dict[str, str] = {
-    "bing":   "https://www.bing.com/search?q=",
-    "baidu":  "https://www.baidu.com/s?wd=",
+    "bing": "https://www.bing.com/search?q=",
+    "baidu": "https://www.baidu.com/s?wd=",
     "google": "https://www.google.com/search?q=",
 }
 _DEFAULT_ENGINE = "bing"
@@ -64,24 +64,20 @@ class SearchService:
 
         # 拼接搜索 URL（关键词做 URL 编码，safe="" 确保中文也被编码）
         base_url = self._get_base_url(resolved_engine)
-        encoded  = quote(keyword, safe="")
-        url      = base_url + encoded
+        encoded = quote(keyword, safe="")
+        url = base_url + encoded
 
         logger.debug(f"搜索：engine={resolved_engine}  keyword={keyword!r}  url={url}")
 
         try:
             # webbrowser.open 在 Windows/Mac/Linux 上均可调用系统默认浏览器
-            webbrowser.open(url)
+            if not webbrowser.open(url):
+                raise RuntimeError("没有可用的默认浏览器")
             engine_label = self._engine_label(resolved_engine)
             return f"已为你搜索：{keyword}。\n（使用 {engine_label}）"
         except Exception as e:
             logger.error(f"打开浏览器失败：{e}")
             return f"⚠️ 打开浏览器失败：{e}\n你可以手动访问：{url}"
-
-    def get_supported_engines(self) -> list[str]:
-        """返回当前支持的所有搜索引擎名称列表"""
-        engines = self._config.engines if self._config else _DEFAULT_ENGINES
-        return list(engines.keys())
 
     # ── 内部工具 ──────────────────────────────────────────────
 
@@ -112,8 +108,8 @@ class SearchService:
     def _engine_label(engine: str) -> str:
         """将引擎 key 转为显示名称"""
         labels = {
-            "bing":   "必应 Bing",
-            "baidu":  "百度",
+            "bing": "必应 Bing",
+            "baidu": "百度",
             "google": "谷歌 Google",
         }
         return labels.get(engine, engine.capitalize())

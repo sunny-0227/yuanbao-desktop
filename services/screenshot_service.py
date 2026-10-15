@@ -37,7 +37,7 @@ class ScreenshotService:
         if self._config:
             return self._config.resolved_save_dir()
         # 默认目录：跨平台使用 Path.home()，避免 %USERPROFILE% 在 macOS/Linux 不展开
-        return str(Path.home() / "Pictures" / "TutuAssistantScreenshots")
+        return str(Path.home() / "Pictures" / "YuanbaoScreenshots")
 
     def _get_fmt(self) -> str:
         if self._config:
@@ -59,10 +59,7 @@ class ScreenshotService:
         try:
             from PIL import ImageGrab  # type: ignore[import]
         except ImportError:
-            return (
-                "⚠️ 截图功能需要安装 Pillow，请运行：\n"
-                "  pip install Pillow"
-            )
+            return "⚠️ 截图功能需要安装 Pillow，请运行：\n  pip install Pillow"
 
         try:
             save_dir = self._get_save_dir()
@@ -85,6 +82,7 @@ class ScreenshotService:
                         os.startfile(filepath)  # type: ignore[attr-defined]
                     elif system == "Darwin":
                         import subprocess
+
                         subprocess.Popen(["open", filepath])
                 except Exception as e:
                     logger.warning(f"自动打开截图失败：{e}")

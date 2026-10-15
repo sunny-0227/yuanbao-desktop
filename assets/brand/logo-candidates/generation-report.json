@@ -1,0 +1,152 @@
+[
+  {
+    "label": "A1",
+    "direction": "圆脸探头",
+    "rationale": "随叫随到的桌面助手",
+    "corner": "lower-left",
+    "subject_colors": [
+      "honey gold #D7A04C",
+      "roasted cocoa #543A29"
+    ],
+    "background": "gently muted eucalyptus green #819A89",
+    "reference_photos": [
+      "元宝照片/253b43043426f6177e72ccd3896042de_compress.jpg",
+      "元宝照片/b53537f3fda7d9b4aa033b1884e695d5_compress.jpg",
+      "元宝照片/64a1070ceebfefc553b468c32f93c623_compress.jpg"
+    ],
+    "provider": "built-in image_gen.imagegen",
+    "model": "not exposed by tool metadata",
+    "constraint_delivery": "main-prompt constraints",
+    "requested_size": "approximately 1536x1536",
+    "prompt_file": "A1-prompt.txt",
+    "saved_path": "assets/brand/logo-candidates/A1.png",
+    "width": 1254,
+    "height": 1254,
+    "sha256": "5f0cdc7939e946b339a0d10fe771626dacc7f961b432e3b97ae1276724102284"
+  },
+  {
+    "label": "A2",
+    "direction": "圆脸探头",
+    "rationale": "随叫随到的桌面助手",
+    "corner": "lower-right",
+    "subject_colors": [
+      "honey gold #D7A04C",
+      "roasted cocoa #543A29"
+    ],
+    "background": "gently muted eucalyptus green #819A89",
+    "reference_photos": [
+      "元宝照片/253b43043426f6177e72ccd3896042de_compress.jpg",
+      "元宝照片/b53537f3fda7d9b4aa033b1884e695d5_compress.jpg",
+      "元宝照片/64a1070ceebfefc553b468c32f93c623_compress.jpg"
+    ],
+    "provider": "built-in image_gen.imagegen",
+    "model": "not exposed by tool metadata",
+    "constraint_delivery": "main-prompt constraints",
+    "requested_size": "approximately 1536x1536",
+    "prompt_file": "A2-prompt.txt",
+    "saved_path": "assets/brand/logo-candidates/A2.png",
+    "width": 1254,
+    "height": 1254,
+    "sha256": "98bb9db36af918b524bf4cef0178a7f106dcee8f124e99aafedf27b4a7fe7dca"
+  },
+  {
+    "label": "B1",
+    "direction": "围脖抱尾",
+    "rationale": "温暖可靠的陪伴",
+    "corner": "lower-left",
+    "subject_colors": [
+      "golden caramel #C98A3A",
+      "pale warm cream #F5E3B9"
+    ],
+    "background": "muted deep teal #315D59",
+    "reference_photos": [
+      "元宝照片/253b43043426f6177e72ccd3896042de_compress.jpg",
+      "元宝照片/b53537f3fda7d9b4aa033b1884e695d5_compress.jpg",
+      "元宝照片/64a1070ceebfefc553b468c32f93c623_compress.jpg"
+    ],
+    "provider": "built-in image_gen.imagegen",
+    "model": "not exposed by tool metadata",
+    "constraint_delivery": "main-prompt constraints",
+    "requested_size": "approximately 1536x1536",
+    "prompt_file": "B1-prompt.txt",
+    "saved_path": "assets/brand/logo-candidates/B1.png",
+    "width": 1254,
+    "height": 1254,
+    "sha256": "1c44835f328fea89c81928d7d196b00c49b097898d628d6b520ed2bbe376cdc2"
+  },
+  {
+    "label": "B2",
+    "direction": "围脖抱尾",
+    "rationale": "温暖可靠的陪伴",
+    "corner": "lower-right",
+    "subject_colors": [
+      "golden caramel #C98A3A",
+      "pale warm cream #F5E3B9"
+    ],
+    "background": "muted deep teal #315D59",
+    "reference_photos": [
+      "元宝照片/253b43043426f6177e72ccd3896042de_compress.jpg",
+      "元宝照片/b53537f3fda7d9b4aa033b1884e695d5_compress.jpg",
+      "元宝照片/64a1070ceebfefc553b468c32f93c623_compress.jpg"
+    ],
+    "provider": "built-in image_gen.imagegen",
+    "model": "not exposed by tool metadata",
+    "constraint_delivery": "main-prompt constraints",
+    "requested_size": "approximately 1536x1536",
+    "prompt_file": "B2-prompt.txt",
+    "saved_path": "assets/brand/logo-candidates/B2.png",
+    "width": 1254,
+    "height": 1254,
+    "sha256": "4d9b41a27b3bf8ad4f87d5be1bb2c8e3f1aa4bd9d39ed36b0914544c2418277a"
+  },
+  {
+    "label": "C1",
+    "direction": "慵懒守候",
+    "rationale": "安静驻留需要时响应",
+    "corner": "lower-left",
+    "subject_colors": [
+      "warm amber #DDA44C",
+      "deep cinnamon brown #68472E"
+    ],
+    "background": "muted powder blue #A7BBC6",
+    "reference_photos": [
+      "元宝照片/253b43043426f6177e72ccd3896042de_compress.jpg",
+      "元宝照片/b53537f3fda7d9b4aa033b1884e695d5_compress.jpg",
+      "元宝照片/64a1070ceebfefc553b468c32f93c623_compress.jpg"
+    ],
+    "provider": "built-in image_gen.imagegen",
+    "model": "not exposed by tool metadata",
+    "constraint_delivery": "main-prompt constraints",
+    "requested_size": "approximately 1536x1536",
+    "prompt_file": "C1-prompt.txt",
+    "saved_path": "assets/brand/logo-candidates/C1.png",
+    "width": 1254,
+    "height": 1254,
+    "sha256": "a027295f58b77cb27de589f9f6b6c7f847f98e352c111125f6bbc36063ab7982"
+  },
+  {
+    "label": "C2",
+    "direction": "慵懒守候",
+    "rationale": "安静驻留需要时响应",
+    "corner": "lower-right",
+    "subject_colors": [
+      "warm amber #DDA44C",
+      "deep cinnamon brown #68472E"
+    ],
+    "background": "muted powder blue #A7BBC6",
+    "reference_photos": [
+      "元宝照片/253b43043426f6177e72ccd3896042de_compress.jpg",
+      "元宝照片/b53537f3fda7d9b4aa033b1884e695d5_compress.jpg",
+      "元宝照片/64a1070ceebfefc553b468c32f93c623_compress.jpg"
+    ],
+    "provider": "built-in image_gen.imagegen",
+    "model": "not exposed by tool metadata",
+    "constraint_delivery": "main-prompt constraints",
+    "requested_size": "approximately 1536x1536",
+    "prompt_file": "C2-prompt.txt",
+    "saved_path": "assets/brand/logo-candidates/C2.png",
+    "width": 1254,
+    "height": 1254,
+    "sha256": "4c422bc1499cfedc2434f3187b77b5dc19f51b0bf22da5726f7ee654fe2adf0c"
+  }
+]

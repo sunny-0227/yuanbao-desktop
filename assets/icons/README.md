@@ -1,15 +1,5 @@
-# assets/icons 目录说明
+# 元宝应用图标
 
-存放应用图标文件。
+`app_icon.png` 是选定B2的原始图，1254×1254；`app_icon.ico` 为Windows图标格式导出，包含16、24、32、48、64、128、256像素。
 
-## 所需文件
-
-| 文件名 | 用途 | 推荐尺寸 |
-|--------|------|----------|
-| `app_icon.ico` | Windows 任务栏 / 标题栏图标（必需） | 256×256（多分辨率 ICO）|
-| `app_icon.png` | 备用 PNG 图标 | 256×256 |
-
-## 注意
-
-- `.ico` 文件可使用 [icoconvert.com](https://icoconvert.com) 从 PNG 转换
-- 文件名必须与代码中一致，不要随意更改
+托盘、应用窗口与Windows打包使用同一套图标，缺图时才显示代码生成的回退图标。品牌色见 `ui/brand.py`，原始候选保存在 `assets/brand/logo-candidates/`。

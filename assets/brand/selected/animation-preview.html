@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>元宝 · 六种动作预览</title>
+<style>
+body{margin:0;padding:32px;background:#F8F4EC;color:#263F3C;font:16px/1.6 system-ui}
+main{max-width:850px;margin:auto}h1{font-size:26px}
+button,select{font:inherit;padding:6px 14px;margin:0 8px 12px 0;border:1px solid #bac9bf;border-radius:8px;background:#FFFCF6;color:#263F3C;cursor:pointer}
+button[aria-pressed=true]{background:#315D59;color:#FFF8E9}
+#stage{min-height:500px;display:grid;place-items:center;border-radius:20px;background:#152D2B}
+canvas{width:240px;height:240px}p{color:#62736B}label{display:inline-block;margin:0 8px 12px 0}label[hidden]{display:none}
+</style>
+<main>
+<h1>元宝 · 六种动作预览</h1>
+<p>透明素材预览，可切换动作、背景和显示尺寸。动画正放再倒放回到原位；软件休眠时保持静态。此页不是Windows界面截图。</p>
+<div id="states" aria-label="选择动作"></div>
+<button onclick="background('dark')">深色</button>
+<button onclick="background('light')">浅色</button>
+<button onclick="background('grid')">透明棋盘</button>
+<select aria-label="显示尺寸" onchange="canvas.style.width=canvas.style.height=this.value+'px'">
+<option value="120">120px · 默认桌宠尺寸</option><option value="240" selected>240px</option><option value="480">480px · 边缘检查</option>
+</select>
+<label id="sleep-control" hidden><input id="sleep-motion" type="checkbox">仅在预览中播放休眠呼吸</label>
+<div id="stage"><canvas id="pet" width="480" height="480" aria-label="透明元宝动作"></canvas></div>
+<p id="status" aria-live="polite">正在加载…</p>
+</main>
+<script>
+const canvas=document.getElementById('pet'),ctx=canvas.getContext('2d');
+const states=[['idle','待机',4000],['listening','聆听',600],['thinking','思考',1000],['speaking','播报',0],['working','执行任务',800],['sleep','休眠',4000]];
+const cache=new Map();let current=states[0],index=0,direction=1,timer,run=0;
+const buttons=new Map();
+for(const spec of states){const b=document.createElement('button');b.textContent=spec[1];b.onclick=()=>select(spec);document.getElementById('states').append(b);buttons.set(spec[0],b);}
+function background(value){document.getElementById('stage').style.background={dark:'#152D2B',light:'#F8F4EC',grid:'repeating-conic-gradient(#ddd 0% 25%,#fff 0% 50%) 0/24px 24px'}[value];}
+function animated(){return current[0]!=='sleep'||document.getElementById('sleep-motion').checked;}
+async function draw(token){
+ const key=current[0]+'/'+index;let img=cache.get(key);
+ if(!img){img=new Image();img.src='../../pet/default/'+current[0]+'-animation/frame-'+String(index+1).padStart(3,'0')+'.png';await img.decode();if(token!==run)return;cache.set(key,img);if(cache.size>16)cache.delete(cache.keys().next().value);}
+ if(token!==run)return;ctx.clearRect(0,0,480,480);ctx.drawImage(img,0,0);
+}
+function schedule(token){if(!document.hidden&&animated())timer=setTimeout(()=>tick(token),index===0?Math.max(83,current[2]):83);}
+async function tick(token){
+ if(token!==run||document.hidden)return;
+ index+=direction;if(index===58)direction=-1;else if(index===0)direction=1;
+ try{await draw(token);if(token===run)schedule(token);}catch(error){failure(token);}
+}
+function failure(token){if(token===run)document.getElementById('status').textContent='素材加载失败，请保留预览页与项目素材的目录关系。';}
+async function select(spec){
+ clearTimeout(timer);const token=++run;current=spec;index=0;direction=1;cache.clear();
+ for(const [state,b] of buttons)b.setAttribute('aria-pressed',String(state===spec[0]));
+ document.getElementById('sleep-control').hidden=spec[0]!=='sleep';
+ document.getElementById('status').textContent=spec[1]+' · 59帧 · 480×480 · RGBA透明 · '+(animated()?'12fps，正放再倒放；回到起点后停顿'+(spec[2]/1000)+'秒':'休眠只显示第一帧，停止刷新');
+ try{await draw(token);if(token===run)schedule(token);}catch(error){failure(token);}
+}
+document.getElementById('sleep-motion').onchange=()=>select(current);
+document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(!document.hidden)select(current);});
+select(current);
+</script>
+</html>

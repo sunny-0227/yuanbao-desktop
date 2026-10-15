@@ -18,13 +18,14 @@ def setup_logger(level: str = "INFO", log_dir: str = "") -> logging.Logger:
     if not log_dir:
         try:
             from app.app_context import data_path
+
             log_dir = data_path("data")
         except Exception:
             log_dir = "data"
 
     log_level = getattr(logging, level.upper(), logging.INFO)
 
-    logger = logging.getLogger("tutu")
+    logger = logging.getLogger("yuanbao")
     logger.setLevel(log_level)
 
     # 避免重复添加 handler；但始终更新 level（允许运行时从 config 覆盖默认 INFO）

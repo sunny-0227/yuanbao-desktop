@@ -1,0 +1,21 @@
+{
+  "label": "A1",
+  "direction": "圆脸探头",
+  "rationale": "随叫随到的桌面助手",
+  "corner": "lower-left",
+  "subject_colors": [
+    "honey gold #D7A04C",
+    "roasted cocoa #543A29"
+  ],
+  "background": "gently muted eucalyptus green #819A89",
+  "reference_photos": [
+    "元宝照片/253b43043426f6177e72ccd3896042de_compress.jpg",
+    "元宝照片/b53537f3fda7d9b4aa033b1884e695d5_compress.jpg",
+    "元宝照片/64a1070ceebfefc553b468c32f93c623_compress.jpg"
+  ],
+  "provider": "built-in image_gen.imagegen",
+  "model": "not exposed by tool metadata",
+  "constraint_delivery": "main-prompt constraints",
+  "requested_size": "approximately 1536x1536",
+  "prompt_file": "A1-prompt.txt"
+}

@@ -1,0 +1,15 @@
+{
+  "source": "思考.mp4",
+  "source_sha256": "a53426515f30132ecee155579942373e68fc5be1548d28455de08db05d756796",
+  "filter": "trim=start_frame=4,setpts=PTS-STARTPTS,fps=12,format=rgba,colorkey=0x2B75A8:0.2:0.06,scale=400:400,pad=480:480:40:40:color=black@0",
+  "frames": 59,
+  "fps": 12,
+  "size": [
+    480,
+    480
+  ],
+  "playback": "ping-pong",
+  "pause_ms": 1000,
+  "animated": true,
+  "note": "正放再倒放，端点不重复；开头留裁切缓冲，去除白底和背景切换。"
+}

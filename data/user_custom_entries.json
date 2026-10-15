@@ -1,6 +1,0 @@
-{
-  "_comment": "用户手动添加的软件、文件夹、网页入口。优先级高于 app_index.json 自动扫描结果。",
-  "apps": {},
-  "folders": {},
-  "websites": {}
-}

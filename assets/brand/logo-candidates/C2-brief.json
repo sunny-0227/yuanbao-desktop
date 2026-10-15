@@ -1,0 +1,21 @@
+{
+  "label": "C2",
+  "direction": "慵懒守候",
+  "rationale": "安静驻留需要时响应",
+  "corner": "lower-right",
+  "subject_colors": [
+    "warm amber #DDA44C",
+    "deep cinnamon brown #68472E"
+  ],
+  "background": "muted powder blue #A7BBC6",
+  "reference_photos": [
+    "元宝照片/253b43043426f6177e72ccd3896042de_compress.jpg",
+    "元宝照片/b53537f3fda7d9b4aa033b1884e695d5_compress.jpg",
+    "元宝照片/64a1070ceebfefc553b468c32f93c623_compress.jpg"
+  ],
+  "provider": "built-in image_gen.imagegen",
+  "model": "not exposed by tool metadata",
+  "constraint_delivery": "main-prompt constraints",
+  "requested_size": "approximately 1536x1536",
+  "prompt_file": "C2-prompt.txt"
+}

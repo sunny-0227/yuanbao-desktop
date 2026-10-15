@@ -12,8 +12,8 @@
 - 路径读取失败、权限不足、快捷方式损坏时跳过并记录日志。
 """
 
-import os
 import json
+import os
 import platform
 import re
 import shutil
@@ -31,11 +31,14 @@ _INDEX_FILE = "app_index.json"
 
 # 扫描来源目录（按优先级排列）
 _SCAN_SOURCES = [
-    ("desktop_shortcut",    "%USERPROFILE%\\Desktop"),
-    ("public_desktop",      "C:\\Users\\Public\\Desktop"),
-    ("start_menu",          "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs"),
-    ("public_start_menu",   "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs"),
-    ("taskbar_pinned",      "%APPDATA%\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar"),
+    ("desktop_shortcut", "%USERPROFILE%\\Desktop"),
+    ("public_desktop", "C:\\Users\\Public\\Desktop"),
+    ("start_menu", "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs"),
+    ("public_start_menu", "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs"),
+    (
+        "taskbar_pinned",
+        "%APPDATA%\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar",
+    ),
 ]
 
 # 无意义后缀 / 词语（用于清理快捷方式名称）
@@ -49,19 +52,19 @@ _NOISE_PATTERNS = [
 # 通用别名映射表（仅少量常见缩写，不限制软件范围）
 _ALIAS_MAP: dict[str, list[str]] = {
     "visual studio code": ["VS Code", "Code", "VSCode"],
-    "vs code":            ["Visual Studio Code", "Code", "VSCode"],
-    "microsoft edge":     ["Edge", "Edge浏览器"],
-    "google chrome":      ["Chrome", "谷歌浏览器"],
-    "mozilla firefox":    ["Firefox", "火狐浏览器"],
-    "wps office":         ["WPS"],
-    "剪映专业版":          ["剪映"],
-    "adobe photoshop":    ["PS", "Photoshop"],
-    "adobe premiere":     ["PR", "Premiere"],
-    "adobe after effects":["AE", "After Effects"],
-    "tencent meeting":    ["腾讯会议"],
-    "netease cloudmusic":  ["网易云音乐"],
-    "wechat":             ["微信"],
-    "dingtalk":           ["钉钉"],
+    "vs code": ["Visual Studio Code", "Code", "VSCode"],
+    "microsoft edge": ["Edge", "Edge浏览器"],
+    "google chrome": ["Chrome", "谷歌浏览器"],
+    "mozilla firefox": ["Firefox", "火狐浏览器"],
+    "wps office": ["WPS"],
+    "剪映专业版": ["剪映"],
+    "adobe photoshop": ["PS", "Photoshop"],
+    "adobe premiere": ["PR", "Premiere"],
+    "adobe after effects": ["AE", "After Effects"],
+    "tencent meeting": ["腾讯会议"],
+    "netease cloudmusic": ["网易云音乐"],
+    "wechat": ["微信"],
+    "dingtalk": ["钉钉"],
 }
 
 # 内置系统工具
@@ -110,12 +113,14 @@ _SYSTEM_TOOLS: dict[str, dict] = {
     },
 }
 
+
 # 空索引结构模板
 def _empty_index() -> dict:
     return {"apps": {}, "folders": {}, "websites": {}, "system_tools": {}}
 
 
 # ── 工具函数 ─────────────────────────────────────────────────
+
 
 def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -163,6 +168,7 @@ def _build_aliases(display_name: str) -> list[str]:
 
 # ── 快捷方式解析 ─────────────────────────────────────────────
 
+
 def _parse_lnk(lnk_path: str, source: str) -> Optional[dict]:
     """
     使用 win32com.client 解析 .lnk 文件。
@@ -181,9 +187,9 @@ def _parse_lnk(lnk_path: str, source: str) -> Optional[dict]:
         shortcut = shell.CreateShortcut(lnk_path)
 
         target = (shortcut.TargetPath or "").strip()
-        args   = (shortcut.Arguments or "").strip()
-        work   = (shortcut.WorkingDirectory or "").strip()
-        icon   = (shortcut.IconLocation or "").strip()
+        args = (shortcut.Arguments or "").strip()
+        work = (shortcut.WorkingDirectory or "").strip()
+        icon = (shortcut.IconLocation or "").strip()
 
         display_name = _clean_name(os.path.basename(lnk_path))
 
@@ -205,13 +211,13 @@ def _parse_lnk(lnk_path: str, source: str) -> Optional[dict]:
             entry_type = "app"
 
         return {
-            "display_name":  display_name,
-            "path":          target_expanded,
-            "arguments":     args,
-            "working_dir":   _expand(work) if work else "",
+            "display_name": display_name,
+            "path": target_expanded,
+            "arguments": args,
+            "working_dir": _expand(work) if work else "",
             "icon_location": icon,
-            "source":        source,
-            "entry_type":    entry_type,
+            "source": source,
+            "entry_type": entry_type,
         }
     except Exception as e:
         logger.debug(f"解析 .lnk 失败（{lnk_path}）：{e}")
@@ -239,9 +245,9 @@ def _parse_url_file(url_path: str, source: str) -> Optional[dict]:
         display_name = _clean_name(os.path.basename(url_path))
         return {
             "display_name": display_name,
-            "url":          url,
-            "source":       source,
-            "entry_type":   "website",
+            "url": url,
+            "source": source,
+            "entry_type": "website",
         }
     except Exception as e:
         logger.debug(f"解析 .url 失败（{url_path}）：{e}")
@@ -249,6 +255,7 @@ def _parse_url_file(url_path: str, source: str) -> Optional[dict]:
 
 
 # ── 主服务类 ─────────────────────────────────────────────────
+
 
 class AppDiscoveryService:
     """
@@ -339,15 +346,15 @@ class AppDiscoveryService:
         """
         raw = self.scan_shortcuts()
         index = _empty_index()
-        now   = _now_str()
+        now = _now_str()
 
         # 优先级：桌面 > 公共桌面 > 开始菜单 > 公共开始菜单 > 任务栏
         priority = {
             "desktop_shortcut": 5,
-            "public_desktop":   4,
-            "start_menu":       3,
-            "public_start_menu":2,
-            "taskbar_pinned":   1,
+            "public_desktop": 4,
+            "start_menu": 3,
+            "public_start_menu": 2,
+            "taskbar_pinned": 1,
         }
 
         def _better(existing: dict, new_source: str) -> bool:
@@ -358,16 +365,16 @@ class AppDiscoveryService:
 
         # ── 处理 apps ────────────────────────────────────────
         for entry in raw["apps"]:
-            name    = entry["display_name"]
+            name = entry["display_name"]
             aliases = _build_aliases(name)
-            record  = {
-                "display_name":  name,
-                "path":          entry["path"],
-                "arguments":     entry.get("arguments", ""),
-                "working_dir":   entry.get("working_dir", ""),
-                "source":        entry["source"],
-                "aliases":       aliases,
-                "confidence":    0.9 if entry["source"] == "desktop_shortcut" else 0.8,
+            record = {
+                "display_name": name,
+                "path": entry["path"],
+                "arguments": entry.get("arguments", ""),
+                "working_dir": entry.get("working_dir", ""),
+                "source": entry["source"],
+                "aliases": aliases,
+                "confidence": 0.9 if entry["source"] == "desktop_shortcut" else 0.8,
                 "last_scanned_at": now,
             }
             # candidates 保存同名多路径
@@ -381,14 +388,14 @@ class AppDiscoveryService:
 
         # ── 处理 folders ─────────────────────────────────────
         for entry in raw["folders"]:
-            name    = entry["display_name"]
+            name = entry["display_name"]
             aliases = _build_aliases(name)
-            record  = {
+            record = {
                 "display_name": name,
-                "path":         entry["path"],
-                "source":       entry["source"],
-                "aliases":      aliases,
-                "confidence":   0.9 if entry["source"] == "desktop_shortcut" else 0.8,
+                "path": entry["path"],
+                "source": entry["source"],
+                "aliases": aliases,
+                "confidence": 0.9 if entry["source"] == "desktop_shortcut" else 0.8,
                 "last_scanned_at": now,
             }
             existing = index["folders"].get(name)
@@ -397,14 +404,14 @@ class AppDiscoveryService:
 
         # ── 处理 websites ─────────────────────────────────────
         for entry in raw["websites"]:
-            name    = entry["display_name"]
+            name = entry["display_name"]
             aliases = _build_aliases(name)
-            record  = {
+            record = {
                 "display_name": name,
-                "url":          entry["url"],
-                "source":       entry["source"],
-                "aliases":      aliases,
-                "confidence":   0.9 if entry["source"] == "desktop_shortcut" else 0.8,
+                "url": entry["url"],
+                "source": entry["source"],
+                "aliases": aliases,
+                "confidence": 0.9 if entry["source"] == "desktop_shortcut" else 0.8,
                 "last_scanned_at": now,
             }
             existing = index["websites"].get(name)
@@ -423,15 +430,10 @@ class AppDiscoveryService:
                 index["system_tools"][name] = tool
         return index
 
-    def save_app_index(self, index: dict) -> None:
-        """保存到 data/app_index.json；现有文件损坏时先备份再重置"""
-        os.makedirs(os.path.dirname(self._index_path), exist_ok=True)
-        try:
-            with open(self._index_path, "w", encoding="utf-8") as f:
-                json.dump(index, f, ensure_ascii=False, indent=2)
-            logger.info(f"app_index.json 已保存：{self._index_path}")
-        except Exception as e:
-            logger.error(f"保存 app_index.json 失败：{e}")
+    def save_app_index(self, index):
+        from app.storage import atomic_json
+
+        atomic_json(self._index_path, index)
 
     def load_app_index(self) -> dict:
         """
@@ -482,27 +484,12 @@ class AppDiscoveryService:
                 if key.lower() == name_lower:
                     return {"category": category, **entry}
             # 别名精确匹配
-            for key, entry in section.items():
+            for _key, entry in section.items():
                 aliases = [a.lower() for a in entry.get("aliases", [])]
                 if name_lower in aliases:
                     return {"category": category, **entry}
-            # 包含匹配（display_name 或别名包含查询词）
-            for key, entry in section.items():
-                if name_lower in key.lower():
-                    return {"category": category, **entry}
-                aliases = [a.lower() for a in entry.get("aliases", [])]
-                if any(name_lower in a for a in aliases):
-                    return {"category": category, **entry}
 
         return None
-
-    def refresh_index(self) -> dict:
-        """重新扫描并覆盖 app_index.json，返回新索引"""
-        logger.info("AppDiscovery：开始重新扫描...")
-        index = self.build_app_index()
-        self.save_app_index(index)
-        logger.info("AppDiscovery：重新扫描完成")
-        return index
 
     def count_summary(self, index: dict) -> tuple[int, int, int]:
         """返回 (apps数, folders数, websites数) 用于通知文案"""

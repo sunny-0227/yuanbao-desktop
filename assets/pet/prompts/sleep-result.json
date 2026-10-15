@@ -1,0 +1,12 @@
+{
+  "state": "sleep",
+  "path": "assets/pet/default/sleep.png",
+  "size": [
+    1254,
+    1254
+  ],
+  "mode": "RGBA",
+  "provider": "built-in image_gen.imagegen",
+  "reference": "approved B2; state variants also reference idle",
+  "prompt": "assets/pet/prompts/sleep.txt"
+}
