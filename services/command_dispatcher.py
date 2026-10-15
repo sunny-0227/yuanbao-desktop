@@ -56,6 +56,8 @@ class CommandDispatcher:
                 os.startfile(str(path))
                 return "已打开本地文件。"
             return self.apps.open_entry(name)
+        if a == "find_app":
+            return self.apps.find_entry_path(d["name"])
         if a == "search":
             return SearchService(self.config.search).search_web(d["query"], d["engine"])
         if a == "add_todo":

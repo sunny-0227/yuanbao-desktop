@@ -28,7 +28,32 @@ def main():
         window.chat.add_message("user", "测试消息")
         window.chat.add_message("assistant", "### 回答\n\n```python\nprint(1)\n```")
         window.chat.set_partial("继续输出")
+        first_bubble = window.chat.bubbles[0]
+        partial_bubble = window.chat.partial_bubble
+        window.chat.set_partial("继续输出，更新同一个气泡")
+        assert window.chat.partial_bubble is partial_bubble
+        assert window.chat.bubbles[0] is first_bubble
         window.chat.set_partial("")
+        assert window.chat.partial_bubble is None
+        window.chat.add_message("assistant", "长消息自动换行。" * 100)
+        window.chat.add_message("error", "未找到软件，请检查桌面图标名称。")
+        window.show()
+        app.processEvents()
+        app.processEvents()
+        user = window.chat.bubbles[0]
+        assistant = window.chat.bubbles[1]
+        assert user.body.x() > user.width() / 2
+        assert assistant.body.x() < assistant.width() / 2
+        for width in (840, 1400):
+            window.resize(width, 740)
+            app.processEvents()
+            app.processEvents()
+            for bubble in window.chat.bubbles:
+                assert bubble.body.width() < bubble.width()
+                assert bubble.text.height() >= bubble.document.size().height()
+        window.chat.load_messages([{"role": "user", "content": "新会话"}])
+        assert len(window.chat.bubbles) == 1
+        assert window.chat.bubbles[0].content == "新会话"
         window.settings.set_config(cfg)
         window.settings.read()
         for index in range(4):

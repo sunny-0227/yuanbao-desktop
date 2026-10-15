@@ -13,10 +13,12 @@
 """
 
 import json
+import ntpath
 import os
 import platform
 import re
 import shutil
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -64,6 +66,8 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "tencent meeting": ["腾讯会议"],
     "netease cloudmusic": ["网易云音乐"],
     "wechat": ["微信"],
+    "weixin": ["微信", "WeChat"],
+    "微信": ["WeChat", "Weixin"],
     "dingtalk": ["钉钉"],
 }
 
@@ -155,15 +159,81 @@ def _build_aliases(display_name: str) -> list[str]:
     2. 查找 _ALIAS_MAP 补充通用别名。
     3. 去重，保持顺序。
     """
-    aliases = [display_name]
-    key = display_name.lower()
+    short_name = re.sub(r"\s+v?\d+(?:\.\d+)*.*$", "", display_name, flags=re.I).strip()
+    aliases = list(dict.fromkeys([display_name, short_name]))
+    key = short_name.lower()
     for map_key, extra in _ALIAS_MAP.items():
-        if key == map_key or key.startswith(map_key):
-            for a in extra:
+        if (
+            key == map_key
+            or key in (a.casefold() for a in extra)
+            or key.startswith((map_key + " ", map_key + "(", map_key + "（"))
+        ):
+            for a in [map_key, *extra]:
                 if a not in aliases:
                     aliases.append(a)
-            break
     return aliases
+
+
+def _name_key(name):
+    return re.sub(r"[\s._-]+", "", name).casefold()
+
+
+def _is_app_file(path):
+    return bool(path) and os.path.isfile(_expand(path))
+
+
+def _safe_executable(value):
+    """从App Paths/DisplayIcon提取文件，不执行注册表中的命令行。"""
+    match = re.match(r'^\s*"([^"\r\n]+\.(?:exe|com))"', value or "", re.I)
+    if not match:
+        match = re.match(r"^\s*(.+?\.(?:exe|com))(?=\s|,|$)", value or "", re.I)
+    path = _expand(match[1]) if match else ""
+    if re.search(r"unins|uninstall|updater|setup", ntpath.basename(path), re.I):
+        return ""
+    return path if _is_app_file(path) else ""
+
+
+def _registry_subkeys(winreg, root, branch, access):
+    try:
+        with winreg.OpenKey(root, branch, 0, access) as parent:
+            for i in range(min(winreg.QueryInfoKey(parent)[0], 10000)):
+                try:
+                    yield winreg.EnumKey(parent, i)
+                except OSError:
+                    continue
+    except OSError:
+        return
+
+
+def _registry_value(winreg, key, name):
+    try:
+        value = winreg.QueryValueEx(key, name)[0]
+        return value if isinstance(value, str) else ""
+    except OSError:
+        return ""
+
+
+def _scan_sources():
+    """补充系统登记的桌面/开始菜单位置，兼容OneDrive和移动后的桌面。"""
+    sources = list(_SCAN_SOURCES)
+    for env in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        if os.environ.get(env):
+            sources.append(("desktop_shortcut", os.path.join(os.environ[env], "Desktop")))
+    try:
+        import winreg
+
+        branch = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, branch) as key:
+            for value, source in (("Desktop", "desktop_shortcut"), ("Programs", "start_menu")):
+                path = _registry_value(winreg, key, value)
+                if path:
+                    sources.append((source, path))
+    except (ImportError, OSError):
+        pass
+    unique = {}
+    for source, path in sources:
+        unique.setdefault(os.path.normcase(_expand(path)), (source, path))
+    return list(unique.values())
 
 
 # ── 快捷方式解析 ─────────────────────────────────────────────
@@ -193,12 +263,19 @@ def _parse_lnk(lnk_path: str, source: str) -> Optional[dict]:
 
         display_name = _clean_name(os.path.basename(lnk_path))
 
-        if not target:
-            logger.debug(f"跳过空目标快捷方式：{lnk_path}")
-            return None
+        if not target or target.lower().startswith(("shell:", "::{")):
+            # Store/打包应用的快捷方式交给Windows Shell解析，不能当成exe路径。
+            return {
+                "display_name": _clean_name(os.path.basename(lnk_path)),
+                "path": lnk_path,
+                "source": source,
+                "entry_type": "app",
+            }
 
         # 展开环境变量
         target_expanded = _expand(target)
+        if not os.path.exists(target_expanded):
+            return None
 
         # 判断类型
         if os.path.isdir(target_expanded):
@@ -276,68 +353,141 @@ class AppDiscoveryService:
     # ── 公开接口 ──────────────────────────────────────────────
 
     def scan_shortcuts(self) -> dict:
-        """
-        扫描桌面、公共桌面、开始菜单、任务栏固定快捷方式。
-        返回已解析的原始条目列表，格式：
-        {"apps": [...], "folders": [...], "websites": [...]}
-        """
+        """限定来源目录和递归深度，不扫描用户整块磁盘。"""
+        result = {"apps": [], "folders": [], "websites": []}
         if platform.system() != "Windows":
-            logger.info("AppDiscoveryService：非 Windows 环境，跳过扫描")
-            return {"apps": [], "folders": [], "websites": []}
+            return result
+        deadline = time.monotonic() + 10
+        visited = 0
+        for source, raw_dir in _scan_sources():
+            root = _expand(raw_dir)
+            for directory, children, files in os.walk(root, followlinks=False):
+                if time.monotonic() > deadline or visited >= 5000:
+                    return result
+                depth = os.path.relpath(directory, root).count(os.sep)
+                if directory != root:
+                    depth += 1
+                if depth >= 4:
+                    children[:] = []
+                children[:] = [
+                    d for d in children if not os.path.islink(os.path.join(directory, d))
+                ]
+                for filename in files:
+                    visited += 1
+                    if visited >= 5000 or time.monotonic() > deadline:
+                        return result
+                    path = os.path.join(directory, filename)
+                    try:
+                        lower = filename.lower()
+                        if lower.endswith(".lnk"):
+                            entry = _parse_lnk(path, source)
+                            if entry:
+                                category = "folders" if entry["entry_type"] == "folder" else "apps"
+                                result[category].append(entry)
+                        elif lower.endswith(".url"):
+                            entry = _parse_url_file(path, source)
+                            if entry:
+                                result["websites"].append(entry)
+                        elif lower.endswith(".exe") and _safe_executable(path):
+                            result["apps"].append(
+                                {
+                                    "display_name": os.path.splitext(filename)[0],
+                                    "path": path,
+                                    "source": source,
+                                }
+                            )
+                    except Exception as exc:
+                        logger.debug("跳过无法读取的入口 %s: %s", path, exc)
+        return result
 
-        apps, folders, websites = [], [], []
-
-        for source, raw_dir in _SCAN_SOURCES:
-            scan_dir = _expand(raw_dir)
-            if not os.path.isdir(scan_dir):
-                logger.debug(f"扫描目录不存在，跳过：{scan_dir}")
-                continue
-
-            for filename in os.listdir(scan_dir):
-                full_path = os.path.join(scan_dir, filename)
-                try:
-                    if filename.lower().endswith(".lnk"):
-                        entry = _parse_lnk(full_path, source)
-                        if entry:
-                            if entry["entry_type"] == "folder":
-                                folders.append(entry)
-                            else:
-                                apps.append(entry)
-                    elif filename.lower().endswith(".url"):
-                        entry = _parse_url_file(full_path, source)
-                        if entry:
-                            websites.append(entry)
-                except Exception as e:
-                    logger.debug(f"处理快捷方式异常，跳过（{full_path}）：{e}")
-
-            # 开始菜单目录：递归一层子目录
-            if source in ("start_menu", "public_start_menu"):
-                for subdir in os.listdir(scan_dir):
-                    sub_path = os.path.join(scan_dir, subdir)
-                    if not os.path.isdir(sub_path):
-                        continue
-                    for filename in os.listdir(sub_path):
-                        full_path = os.path.join(sub_path, filename)
-                        try:
-                            if filename.lower().endswith(".lnk"):
-                                entry = _parse_lnk(full_path, source)
-                                if entry:
-                                    if entry["entry_type"] == "folder":
-                                        folders.append(entry)
-                                    else:
-                                        apps.append(entry)
-                            elif filename.lower().endswith(".url"):
-                                entry = _parse_url_file(full_path, source)
-                                if entry:
-                                    websites.append(entry)
-                        except Exception as e:
-                            logger.debug(f"处理快捷方式异常，跳过（{full_path}）：{e}")
-
-        logger.info(
-            f"AppDiscovery 扫描完成：{len(apps)} 个应用，"
-            f"{len(folders)} 个文件夹，{len(websites)} 个网页"
+    def scan_registered_apps(self):
+        """读取当前用户/系统、32/64位的应用注册信息；支持自定义安装盘。"""
+        apps = []
+        if platform.system() != "Windows":
+            return apps
+        try:
+            import winreg
+        except ImportError:
+            return apps
+        views = (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY)
+        branches = (
+            (r"Software\Microsoft\Windows\CurrentVersion\App Paths", "registry_app_path"),
+            (r"Software\Microsoft\Windows\CurrentVersion\Uninstall", "registry_install"),
         )
-        return {"apps": apps, "folders": folders, "websites": websites}
+        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for view in views:
+                access = winreg.KEY_READ | view
+                for branch, source in branches:
+                    for subkey in _registry_subkeys(winreg, root, branch, access):
+                        try:
+                            with winreg.OpenKey(root, branch + "\\" + subkey, 0, access) as key:
+                                if source == "registry_app_path":
+                                    name = ntpath.splitext(subkey)[0]
+                                    path = _safe_executable(_registry_value(winreg, key, ""))
+                                else:
+                                    name = _registry_value(winreg, key, "DisplayName")
+                                    if not name:
+                                        continue
+                                    path = _safe_executable(
+                                        _registry_value(winreg, key, "DisplayIcon")
+                                    )
+                                    if not path:
+                                        location = _registry_value(winreg, key, "InstallLocation")
+                                        path = self._find_installed_exe(location, name)
+                                if name and path:
+                                    apps.append(
+                                        {"display_name": name, "path": path, "source": source}
+                                    )
+                        except OSError:
+                            continue
+        return apps
+
+    @staticmethod
+    def _find_installed_exe(location, name):
+        if not location or not os.path.isdir(_expand(location)):
+            return ""
+        aliases = {_name_key(n) for n in _build_aliases(name)}
+        matches = []
+        visited = 0
+        root = _expand(location)
+        for directory, children, files in os.walk(root, followlinks=False):
+            visited += 1
+            if visited > 100:
+                break
+            if os.path.relpath(directory, root).count(os.sep) >= 2:
+                children[:] = []
+            children[:] = [d for d in children if not os.path.islink(os.path.join(directory, d))]
+            for filename in files:
+                if _name_key(os.path.splitext(filename)[0]) in aliases:
+                    path = _safe_executable(os.path.join(directory, filename))
+                    if path:
+                        matches.append(path)
+        return sorted(set(matches), key=lambda p: (len(p), p.casefold()))[0] if matches else ""
+
+    def scan_running_apps(self):
+        """只读取现有进程的程序位置，不结束或启动进程。"""
+        if platform.system() != "Windows":
+            return []
+        import psutil
+
+        apps = []
+        try:
+            for proc in psutil.process_iter(["exe"]):
+                try:
+                    path = _safe_executable(proc.info.get("exe") or "")
+                    if path:
+                        apps.append(
+                            {
+                                "display_name": ntpath.splitext(ntpath.basename(path))[0],
+                                "path": path,
+                                "source": "running_process",
+                            }
+                        )
+                except (psutil.Error, OSError):
+                    continue
+        except psutil.Error:
+            pass
+        return apps
 
     def build_app_index(self) -> dict:
         """
@@ -345,11 +495,15 @@ class AppDiscoveryService:
         同名条目：后扫描的来源覆盖前者，但 desktop_shortcut 优先级最高。
         """
         raw = self.scan_shortcuts()
+        raw["apps"] += self.scan_registered_apps() + self.scan_running_apps()
         index = _empty_index()
         now = _now_str()
 
         # 优先级：桌面 > 公共桌面 > 开始菜单 > 公共开始菜单 > 任务栏
         priority = {
+            "registry_app_path": 4,
+            "registry_install": 3,
+            "running_process": 0,
             "desktop_shortcut": 5,
             "public_desktop": 4,
             "start_menu": 3,
@@ -365,6 +519,8 @@ class AppDiscoveryService:
 
         # ── 处理 apps ────────────────────────────────────────
         for entry in raw["apps"]:
+            if not _is_app_file(entry.get("path", "")):
+                continue
             name = entry["display_name"]
             aliases = _build_aliases(name)
             record = {
@@ -377,13 +533,17 @@ class AppDiscoveryService:
                 "confidence": 0.9 if entry["source"] == "desktop_shortcut" else 0.8,
                 "last_scanned_at": now,
             }
-            # candidates 保存同名多路径
+            # 同名、不同安装位置全部保留，以免默默启动另一个版本。
             existing = index["apps"].get(name)
             if existing:
                 if not _better(existing, entry["source"]):
                     candidates = existing.setdefault("candidates", [])
-                    candidates.append({"path": entry["path"], "source": entry["source"]})
+                    candidates.append(record)
                     continue
+                record["candidates"] = [
+                    {k: v for k, v in existing.items() if k != "candidates"},
+                    *existing.get("candidates", []),
+                ]
             index["apps"][name] = record
 
         # ── 处理 folders ─────────────────────────────────────
@@ -467,29 +627,66 @@ class AppDiscoveryService:
             return self.ensure_default_system_tools(_empty_index())
 
     def get_entry_by_name(self, name: str) -> Optional[dict]:
-        """
-        根据名称或别名查找条目。
-        查找顺序：apps → folders → websites → system_tools。
-        匹配策略：精确 > 别名精确 > 包含匹配。
-        返回 {"category": "apps"|"folders"|"websites"|"system_tools", **entry_fields}
-        或 None（未找到）。
-        """
-        index = self.load_app_index()
-        name_lower = name.strip().lower()
+        return self._match_entry(name, self.load_app_index())
 
+    def resolve_entry(self, name: str) -> Optional[dict]:
+        entry = self.get_entry_by_name(name)
+        if entry:
+            return entry
+        index = self.build_app_index()
+        try:
+            self.save_app_index(index)
+        except OSError as exc:
+            # 缓存写入失败不妨碍使用本次已经找到的位置。
+            logger.warning("应用索引暂未保存：%s", exc)
+        return self._match_entry(name, index)
+
+    @staticmethod
+    def _match_entry(name, index):
+        query = _name_key(name)
+        if not query:
+            return None
+        exact, aliases, partial = [], [], []
         for category in ("apps", "folders", "websites", "system_tools"):
-            section = index.get(category, {})
-            # 精确匹配 display_name
-            for key, entry in section.items():
-                if key.lower() == name_lower:
-                    return {"category": category, **entry}
-            # 别名精确匹配
-            for _key, entry in section.items():
-                aliases = [a.lower() for a in entry.get("aliases", [])]
-                if name_lower in aliases:
-                    return {"category": category, **entry}
-
-        return None
+            for label, original in index.get(category, {}).items():
+                records = [original, *original.get("candidates", [])]
+                for entry in records:
+                    if category == "apps" and not _is_app_file(entry.get("path", "")):
+                        continue
+                    if category == "folders" and not os.path.isdir(_expand(entry.get("path", ""))):
+                        continue
+                    item = {"category": category, **entry}
+                    display = entry.get("display_name", label)
+                    names = {
+                        _name_key(n) for n in _build_aliases(display) + entry.get("aliases", [])
+                    }
+                    if query == _name_key(display):
+                        exact.append(item)
+                    elif query in names:
+                        aliases.append(item)
+                    elif (
+                        len(query) >= 2
+                        and query in _name_key(display)
+                        and not re.search(
+                            r"卸载|更新|帮助|uninstall|updater|setup|helper", display, re.I
+                        )
+                    ):
+                        partial.append(item)
+        matches = exact or aliases or partial
+        unique = {}
+        for entry in matches:
+            target = entry.get("path") or entry.get("url") or entry.get("command")
+            if target:
+                unique.setdefault(os.path.normcase(target), entry)
+        if len(unique) > 1:
+            options = "\n".join(
+                f"• {e.get('display_name', name)}：{e.get('path') or e.get('url') or e.get('command')}"
+                for e in list(unique.values())[:5]
+            )
+            raise ValueError(
+                f"找到多个「{name}」入口，暂未打开：\n{options}\n请使用更完整的软件名称或直接提供其中的路径。"
+            )
+        return next(iter(unique.values()), None)
 
     def count_summary(self, index: dict) -> tuple[int, int, int]:
         """返回 (apps数, folders数, websites数) 用于通知文案"""

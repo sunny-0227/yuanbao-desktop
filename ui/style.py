@@ -39,6 +39,16 @@ def apply_theme(app, config):
         QListWidget#Navigation::item {padding: 14px 10px; margin-bottom: 6px; border-radius: 7px;}
         QListWidget#Navigation::item:selected {background: %(active)s; color: %(accent)s;}
         QScrollArea {border: none; background: transparent;}
+        QScrollArea#ChatScroll {border: 1px solid %(border)s; border-radius: 10px; background: %(bg)s;}
+        QWidget#ChatSurface {background: %(bg)s;}
+        QFrame#UserBubble {background: %(active)s; border: none; border-radius: 12px;}
+        QFrame#AssistantBubble {background: %(panel)s; border: 1px solid %(border)s; border-radius: 12px;}
+        QFrame#ErrorBubble {background: %(gold_surface)s; border: none; border-radius: 12px;}
+        QTextBrowser#BubbleText {background: transparent; border: none; padding: 0; border-radius: 0;}
+        QFrame#ErrorBubble QTextBrowser, QFrame#ErrorBubble QLabel {color: %(on_gold)s;}
+        QLabel#BubbleHint {font-weight: 600;}
+        QLabel#UserAvatar {background: %(primary)s; color: %(on_primary)s; border-radius: 8px; font-weight: 600;}
+        QLabel#ChatEmpty {color: %(muted)s; padding: 28px;}
         QTabWidget::pane {border: 1px solid %(border)s;}
         QTabBar::tab {padding: 8px 14px; background: %(panel)s;}
         QTabBar::tab:selected {background: %(active)s;}

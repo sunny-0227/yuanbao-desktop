@@ -25,6 +25,7 @@ from app.app_context import data_path
 from app.config import AppConfig
 from app.logger import setup_logger
 from app.utils import is_windows
+from services.app_discovery_service import _name_key
 
 logger = setup_logger()
 
@@ -46,6 +47,26 @@ def _startfile(target: str) -> None:
 def _expand(path: str) -> str:
     """展开 Windows 环境变量并规范化路径"""
     return os.path.normpath(os.path.expandvars(path))
+
+
+def _entry_available(entry):
+    category = entry.get("category", "apps")
+    if category in ("websites", "system_tools"):
+        return True
+    path = entry.get("path", "")
+    if not path:
+        return False
+    expanded = _expand(path)
+    if os.path.exists(expanded):
+        return True
+    # 仅允许PATH里实际存在的程序名，不能把失效路径当成系统命令。
+    import shutil
+
+    return (
+        category == "apps"
+        and not any(c in path for c in ("/", "\\", ":"))
+        and bool(shutil.which(path))
+    )
 
 
 def _launch_exe(command: str, display_name: str, arguments: str = "", working_dir: str = "") -> str:
@@ -207,13 +228,17 @@ class AppCommandService:
         for category in ("apps", "folders", "websites"):
             for entry_key, entry in custom[category].items():
                 aliases = [a.lower() for a in entry.get("aliases", [entry_key])]
-                if key == entry_key.lower() or key in aliases:
-                    return {"category": category, **entry}
+                if _name_key(key) == _name_key(entry_key) or _name_key(key) in map(
+                    _name_key, aliases
+                ):
+                    candidate = {"category": category, **entry}
+                    if _entry_available(candidate):
+                        return candidate
 
         # ── 2. config.json quick_apps ─────────────────────────
         for map_key, item in self._cfg_app_map.items():
-            if key == map_key:
-                return {
+            if _name_key(key) == _name_key(map_key):
+                candidate = {
                     "category": "apps",
                     "display_name": item.get("name", name),
                     "path": item.get("command", ""),
@@ -221,23 +246,29 @@ class AppCommandService:
                     "working_dir": item.get("working_dir", ""),
                     "source": "config",
                 }
+                if _entry_available(candidate):
+                    return candidate
 
         # config.json quick_folders
         for map_key, item in self._cfg_folder_map.items():
             if key == map_key:
-                return {
+                candidate = {
                     "category": "folders",
                     "display_name": item.get("name", name),
                     "path": item.get("path", ""),
                     "source": "config",
                 }
+                if _entry_available(candidate):
+                    return candidate
 
         # ── 3. app_index.json ─────────────────────────────────
         if self._discovery:
             try:
-                entry = self._discovery.get_entry_by_name(name)
+                entry = self._discovery.resolve_entry(name)
                 if entry:
                     return entry
+            except ValueError:
+                raise
             except Exception as e:
                 logger.debug(f"app_index 查找异常：{e}")
 
@@ -253,14 +284,18 @@ class AppCommandService:
         if not is_windows():
             return _NOT_WIN_MSG
 
-        entry = self._lookup(name)
+        if name.strip() in ("浏览器", "默认浏览器"):
+            return self.open_browser()
+        try:
+            entry = self._lookup(name)
+        except ValueError as exc:
+            return str(exc)
 
         if not entry:
             return (
-                f"我还没有找到「{name}」的位置。\n"
-                "你可以：\n"
-                "• 在设置中手动添加\n"
-                "• 点击「重新识别常用入口」让我重新扫描你的桌面快捷方式"
+                f"已自动查找桌面、开始菜单、应用注册信息和正在运行的软件，仍未找到「{name}」。\n"
+                "可以试试桌面图标的完整名称。便携软件如果没有快捷方式或注册记录，"
+                "可先把快捷方式放到桌面，再直接说“打开软件名”。"
             )
 
         category = entry.get("category", "apps")
@@ -285,6 +320,19 @@ class AppCommandService:
         arguments = entry.get("arguments", "")
         working = entry.get("working_dir", "")
         return _launch_exe(path, display, arguments, working)
+
+    def find_entry_path(self, name):
+        """本地查询实际位置，不启动程序，也不调用AI。"""
+        if not is_windows():
+            return _NOT_WIN_MSG
+        try:
+            entry = self._lookup(name)
+        except ValueError as exc:
+            return str(exc)
+        if not entry:
+            return f"自动查找后仍未找到「{name}」。请确认桌面图标名称；无需逐个配置安装路径。"
+        path = entry.get("path") or entry.get("url") or entry.get("command")
+        return f"找到了「{entry.get('display_name', name)}」：\n{_expand(path) if entry.get('path') else path}"
 
     def open_browser(self, url: str = "") -> str:
         """打开系统默认浏览器，可选传入目标 URL"""

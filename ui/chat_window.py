@@ -1,20 +1,19 @@
 """对话面板：历史会话、流式阅读与本地快捷入口。"""
 
-import html
-
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QDesktopServices, QTextDocument
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
-    QTextBrowser,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
+
+from ui.message_bubble import MessageBubble
 
 
 class InputEdit(QTextEdit):
@@ -28,12 +27,6 @@ class InputEdit(QTextEdit):
             self.submitted.emit()
         else:
             super().keyPressEvent(event)
-
-
-class SafeDocument(QTextDocument):
-    def loadResource(self, kind, url):
-        # 模型文本不能加载远程图片、文件路径或主动发出网络请求。
-        return None
 
 
 class ChatWindow(QWidget):
@@ -73,12 +66,35 @@ class ChatWindow(QWidget):
         delete.clicked.connect(self._delete)
         row.addWidget(delete)
         layout.addLayout(row)
-        self.view = QTextBrowser()
-        self.document = SafeDocument(self.view)
-        self.view.setDocument(self.document)
-        self.view.setOpenLinks(False)
-        self.view.anchorClicked.connect(self._open_link)
+        self.view = QScrollArea()
+        self.view.setObjectName("ChatScroll")
+        self.view.setWidgetResizable(True)
+        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.view.setAccessibleName("对话内容")
+        self.surface = QWidget()
+        self.surface.setObjectName("ChatSurface")
+        self.message_layout = QVBoxLayout(self.surface)
+        self.message_layout.setContentsMargins(20, 20, 20, 20)
+        self.message_layout.setSpacing(18)
+        self.empty_label = QLabel(
+            "今天有什么需要处理？\n\n可以说“打开桌面上的微信”，也可以输入问题与元宝聊聊。\n"
+            "普通软件指令自动在本地处理；AI对话请先在设置里完成连接。"
+        )
+        self.empty_label.setObjectName("ChatEmpty")
+        self.empty_label.setWordWrap(True)
+        self.message_layout.addWidget(self.empty_label)
+        self.message_layout.addStretch(1)
+        self.bubbles = []
+        self.partial_bubble = None
+        self.follow_bottom = True
+        self.view.setWidget(self.surface)
+        bar = self.view.verticalScrollBar()
+        bar.valueChanged.connect(
+            lambda value: setattr(self, "follow_bottom", bar.maximum() - value < 50)
+        )
+        bar.rangeChanged.connect(
+            lambda low, high: bar.setValue(high) if self.follow_bottom else None
+        )
         layout.addWidget(self.view, 1)
         quick = QHBoxLayout()
         for label, command in (
@@ -114,10 +130,6 @@ class ChatWindow(QWidget):
         layout.addLayout(footer)
         self._render()
 
-    def _open_link(self, url):
-        if url.scheme() in ("https", "http"):
-            QDesktopServices.openUrl(url)
-
     def _send(self):
         if self.running:
             self.cancel_requested.emit()
@@ -145,51 +157,66 @@ class ChatWindow(QWidget):
         ):
             self.delete_requested.emit(ident)
 
+    def _append_bubble(self, role, text):
+        bubble = MessageBubble(role, text, self.surface)
+        self.message_layout.insertWidget(self.message_layout.count() - 1, bubble)
+        self.empty_label.hide()
+        return bubble
+
+    def _remove_partial(self):
+        if self.partial_bubble:
+            self.message_layout.removeWidget(self.partial_bubble)
+            self.partial_bubble.deleteLater()
+            self.partial_bubble = None
+
     def add_message(self, role, text):
-        if role == "assistant":
+        if role in ("assistant", "error"):
             self.partial_text = ""
+            self._remove_partial()
+        if role == "user":
+            self.follow_bottom = True
         self.messages.append({"role": role, "content": text})
-        self._render()
+        self.bubbles.append(self._append_bubble(role, text))
+        self._scroll_after_layout()
 
     def set_partial(self, text):
         if text == self.partial_text:
             return
         self.partial_text = text
-        self._render()
+        if not text:
+            self._remove_partial()
+            self.empty_label.setVisible(not self.messages)
+        elif self.partial_bubble:
+            self.partial_bubble.set_content(text)
+        else:
+            self.partial_bubble = self._append_bubble("assistant", text)
+        self._scroll_after_layout()
 
     def load_messages(self, messages):
         self.messages = list(messages)
         self.partial_text = ""
+        self.follow_bottom = True
         self._render()
 
     def _render(self):
-        bar = self.view.verticalScrollBar()
-        follow = bar.maximum() - bar.value() < 50
-        position = bar.value()
-        entries = self.messages + (
-            [{"role": "assistant", "content": self.partial_text}] if self.partial_text else []
-        )
-        if not entries:
-            self.document.setMarkdown(
-                "### 今天有什么需要处理？\n\n你可以直接说“打开计算器”，也可以输入问题与元宝聊聊。\n\nAI 和语音首次使用时，请先到设置完成连接。"
-            )
-        else:
-            parts = []
-            for entry in entries:
-                label = {
-                    "user": "你",
-                    "assistant": "元宝",
-                    "error": "未完成",
-                    "system": "提示",
-                }.get(entry["role"], "元宝")
-                text = html.escape(entry["content"])
-                # Markdown 图片不加载，也不把模型 HTML 当网页执行。
-                import re
+        self._remove_partial()
+        for bubble in self.bubbles:
+            self.message_layout.removeWidget(bubble)
+            bubble.deleteLater()
+        self.bubbles = [self._append_bubble(e["role"], e["content"]) for e in self.messages]
+        self.empty_label.setVisible(not self.messages)
+        self._scroll_after_layout()
 
-                text = re.sub(r"!\[([^]]*)\]\([^)]*\)", r"[图片：\1]", text)
-                parts.append("**" + label + "**\n\n" + text)
-            self.document.setMarkdown("\n\n---\n\n".join(parts))
-        QTimer.singleShot(0, lambda: bar.setValue(bar.maximum() if follow else position))
+    def _scroll_after_layout(self):
+        if self.follow_bottom:
+            QTimer.singleShot(
+                0,
+                lambda: (
+                    self.view.verticalScrollBar().setValue(self.view.verticalScrollBar().maximum())
+                    if self.follow_bottom
+                    else None
+                ),
+            )
 
     def set_busy(self, value):
         self.running = value

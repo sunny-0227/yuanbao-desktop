@@ -26,6 +26,14 @@ class CommandRouter:
         def hit(action, data=None, confirm=False):
             return CommandResult(True, action=action, data=data or {}, confirmation=confirm)
 
+        path_query = re.fullmatch(
+            r"(?:(?:你)?(?:帮我)?(?:找一下|找下|查一下|查下|查找|查询|查|查看|找)(?:我)?\s*(.+?)(?:的)?(?:安装路径|安装位置|路径|地址|位置)|(.+?)(?:的)?(?:安装路径|安装位置|路径|地址|位置)(?:在哪(?:里)?|是什么))",
+            norm,
+        )
+        if path_query:
+            name = (path_query[1] or path_query[2]).strip().rstrip("的")
+            return hit("find_app", {"name": name})
+
         if norm in ("取消静音", "恢复声音", "打开声音", "取消消音"):
             return hit("unmute")
         if norm in ("静音", "关闭声音", "关声音", "消音"):
@@ -138,7 +146,8 @@ class CommandRouter:
             )
         m = re.fullmatch(r"(?:打开|启动|运行)\s*(.+)", norm)
         if m:
-            return hit("open", {"name": m[1]})
+            name = re.sub(r"^(?:桌面上的|桌面上|桌面的|我桌面上的|电脑上的)", "", m[1]).strip()
+            return hit("open", {"name": name})
         m = re.fullmatch(r"(?:关闭|退出软件)\s*(.+)", norm)
         if m:
             return hit("close_app", {"name": m[1]}, True)
