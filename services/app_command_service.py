@@ -17,7 +17,6 @@
 
 import json
 import os
-import subprocess
 import webbrowser
 from typing import Optional
 
@@ -26,6 +25,7 @@ from app.config import AppConfig
 from app.logger import setup_logger
 from app.utils import is_windows
 from services.app_discovery_service import _name_key
+from services.app_launch_service import LaunchOutcome, launch_application, observe_launch
 
 logger = setup_logger()
 
@@ -69,58 +69,8 @@ def _entry_available(entry):
     )
 
 
-def _launch_exe(command: str, display_name: str, arguments: str = "", working_dir: str = "") -> str:
-    """
-    启动一个应用程序。
-    - arguments 不为空时通过 subprocess.Popen 传递。
-    - working_dir 不为空时设置 cwd。
-    策略：先尝试 os.startfile（无参数时），失败则回退到 subprocess.Popen。
-    """
-    cmd_expanded = _expand(command)
-    work_expanded = _expand(working_dir) if working_dir else None
-
-    # 路径存在性检查（系统命令如 calc.exe 跳过）
-    is_system_cmd = os.sep not in command and ":" not in command
-    if not is_system_cmd and not os.path.exists(cmd_expanded):
-        logger.warning(f"程序文件不存在：{cmd_expanded}")
-        return (
-            f"⚠️ 找不到「{display_name}」的程序文件，"
-            f"路径可能已变更：{cmd_expanded}\n"
-            "你可以在设置中更新路径，或点击重新识别常用入口。"
-        )
-
-    # 有参数时必须用 Popen
-    if arguments:
-        try:
-            args = subprocess.list2cmdline([cmd_expanded]) + " " + arguments
-            kw: dict = {"shell": False}
-            if work_expanded and os.path.isdir(work_expanded):
-                kw["cwd"] = work_expanded
-            subprocess.Popen(args, **kw)
-            return f"{display_name} 已打开。"
-        except Exception as e:
-            logger.error(f"Popen 启动失败（{cmd_expanded}）：{e}")
-            return f"⚠️ 打开「{display_name}」失败：{e}"
-
-    # 无参数：优先 os.startfile
-    try:
-        _startfile(cmd_expanded)
-        return f"{display_name} 已打开。"
-    except Exception as e1:
-        logger.debug(f"startfile 失败，尝试 Popen：{e1}")
-
-    try:
-        kw = {"shell": False}
-        if work_expanded and os.path.isdir(work_expanded):
-            kw["cwd"] = work_expanded
-        subprocess.Popen([cmd_expanded], **kw)
-        return f"{display_name} 已打开。"
-    except FileNotFoundError:
-        logger.warning(f"找不到可执行文件：{cmd_expanded}")
-        return f"⚠️ 找不到「{display_name}」，请在设置中手动添加，或点击重新识别常用入口。"
-    except Exception as e2:
-        logger.error(f"启动 {display_name} 失败：{e2}")
-        return f"⚠️ 打开「{display_name}」失败：{e2}"
+def _launch_exe(command, display_name, arguments="", working_dir=""):
+    return launch_application(command, display_name, arguments, working_dir)
 
 
 def _open_folder_path(path: str, display_name: str) -> str:
@@ -188,6 +138,7 @@ class AppCommandService:
     ):
         self._config = config
         self._discovery = discovery
+        self.last_launch = None
 
         # config 快速查找表（不区分大小写）
         self._cfg_app_map: dict[str, dict] = {}
@@ -312,14 +263,41 @@ class AppCommandService:
         if category == "system_tools":
             cmd = entry.get("command", "")
             display = entry.get("display_name", name)
-            return _launch_exe(cmd, display)
+            return self._launch(cmd, display)
 
         # apps
         path = entry.get("path", "")
         display = entry.get("display_name", name)
         arguments = entry.get("arguments", "")
         working = entry.get("working_dir", "")
-        return _launch_exe(path, display, arguments, working)
+        return self._launch(path, display, arguments, working)
+
+    def _launch(self, path, name, arguments="", working=""):
+        result = _launch_exe(path, name, arguments, working)
+        if isinstance(result, LaunchOutcome):
+            self.last_launch = result
+        return str(result)
+
+    def open_path(self, path):
+        if not is_windows():
+            return _NOT_WIN_MSG
+        target = _expand(path)
+        if os.path.isdir(target):
+            try:
+                _startfile(target)
+                self.last_launch = LaunchOutcome(os.path.basename(target), target, "requested")
+                return "已向Windows发送打开文件夹的请求：\n" + target
+            except OSError as exc:
+                self.last_launch = LaunchOutcome(target, target, "failed", str(exc))
+                return str(self.last_launch)
+        return self._launch(target, os.path.basename(target))
+
+    def check_last_launch(self):
+        if self.last_launch is None:
+            return "当前对话还没有实际启动软件的记录。可以告诉我软件名或完整路径。"
+        if self.last_launch.status != "failed":
+            self.last_launch = observe_launch(self.last_launch.name, self.last_launch.target)
+        return str(self.last_launch)
 
     def find_entry_path(self, name):
         """本地查询实际位置，不启动程序，也不调用AI。"""
@@ -338,8 +316,9 @@ class AppCommandService:
         """打开系统默认浏览器，可选传入目标 URL"""
         try:
             target = url.strip() if url else ""
-            webbrowser.open(target if target else "about:blank")
-            return f"已在浏览器中打开：{target}" if target else "浏览器已打开。"
+            if not webbrowser.open(target if target else "about:blank"):
+                return "⚠️ 系统没有接受浏览器启动请求，请检查默认浏览器设置。"
+            return f"已向默认浏览器发送打开请求：{target or '新标签页'}，尚未核实窗口状态。"
         except Exception as e:
             logger.error(f"打开浏览器失败：{e}")
             return f"⚠️ 打开浏览器失败：{e}"

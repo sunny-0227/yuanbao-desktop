@@ -16,7 +16,21 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install -r requirements-dev.txt -r requirements-win.txt
       - run: python -m ruff check app services ui main.py scripts tests
-      - run: python -m pytest -q
+      - run: python -m pytest -q --junitxml=build/test-results.xml -o junit_logging=all -o junit_log_passing_tests=false
+      - name: Report test failure details
+        if: failure()
+        shell: python
+        run: |
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          report = Path('build/test-results.xml')
+          if report.exists():
+              for case in ET.parse(report).iter('testcase'):
+                  errors = [e for e in case if e.tag in ('failure', 'error')]
+                  if errors:
+                      detail = case.get('name', '') + '\n' + '\n'.join(e.text or '' for e in case)
+                      detail = detail[:25000].replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+                      print('::error title=Windows regression failure::' + detail)
       - name: Build Yuanbao.exe
         run: python scripts/build_exe.py --onefile
       - name: Upload Windows executable

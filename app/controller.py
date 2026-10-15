@@ -1,12 +1,12 @@
 """应用控制器：UI 只发信号；服务生命周期与业务状态集中在这里。"""
 
-import asyncio
 import copy
 from datetime import datetime
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from app.config import ConfigStore, apply_environment
+from app.conversation import ConversationCoordinator, ConversationReply
 from app.state_manager import StateManager
 from app.storage import Database
 from services.ai_service import AIService
@@ -14,8 +14,8 @@ from services.audio_service import AudioService
 from services.auto_sleep_service import AutoSleepService
 from services.chat_history import ChatHistory
 from services.command_dispatcher import CommandDispatcher
+from services.command_router import CommandResult
 from services.local_command_executor import LocalCommandExecutor
-from services.weather_service import weather
 
 
 class AppController(QObject):
@@ -92,21 +92,7 @@ class AppController(QObject):
             return
         self.message.emit("user", text)
         self.history_changed.emit()
-        command = self.dispatcher.router.route(text)
-        if command.confirmation:
-            self.pending = (command, self.active_session)
-            self.confirmation.emit(command)
-            self.status.emit("等待你确认操作")
-            return
-        if command.action in ("sleep", "wake"):
-            if command.action == "sleep":
-                self.state.set_state("sleep", manual=True, reason="手动休眠")
-                self._reply("已进入休眠，点击助手或托盘“恢复工作”即可唤醒。")
-            else:
-                self.state.touch_interaction()
-                self._reply("已恢复工作。")
-            return
-        self._execute(command)
+        self._execute()
 
     @Slot(bool)
     def confirm(self, accepted):
@@ -119,20 +105,18 @@ class AppController(QObject):
         if accepted:
             self._execute(command)
         else:
-            self._reply("已取消，本次操作没有执行。")
+            self._execute(CommandResult(True, "agent_decline", command.data))
 
-    def _execute(self, command):
+    def _execute(self, decision=None):
         context = self.history.context(self.active_session)
+        session = self.active_session
         self.buffer = ""
-        dispatcher, ai = self.dispatcher, self.ai
+        coordinator = ConversationCoordinator(
+            self.dispatcher, self.ai, self.db, self.state.get_state
+        )
 
         def work(cancel, chunk, status):
-            if command.action == "weather":
-                return asyncio.run(weather(command.data["city"], cancel))
-            if command.handled:
-                status("正在执行本地指令")
-                return dispatcher.execute(command)
-            return ai.ask(context, cancel, chunk, status)
+            return coordinator.respond(session, context, cancel, chunk, status, decision)
 
         self.audio.inhibit_wake(True)
         try:
@@ -141,10 +125,9 @@ class AppController(QObject):
             self.audio.inhibit_wake(False)
             self.message.emit("error", str(exc))
             return
-        if not command.handled:
-            self.stream_timer.start()
+        self.stream_timer.start()
         self.busy.emit(True)
-        self.pet_state.emit("thinking" if not command.handled else "working")
+        self.pet_state.emit("thinking")
         self.status.emit("正在处理")
 
     @Slot(str, object)
@@ -156,9 +139,26 @@ class AppController(QObject):
             return
         if ident != self.current:
             return
+        if isinstance(value, ConversationReply) and value.confirmation:
+            self.pending = (value.confirmation, self.active_session)
+            QTimer.singleShot(
+                0,
+                lambda command=value.confirmation: (
+                    self.confirmation.emit(command)
+                    if self.pending and self.pending[0] is command
+                    else None
+                ),
+            )
         if value:
             self._reply(str(value))
-            self.audio.speak(str(value))
+            if not isinstance(value, ConversationReply) or value.power != "sleep":
+                self.audio.speak(str(value))
+        if isinstance(value, ConversationReply) and value.power:
+            self._finished(ident)
+            if value.power == "sleep":
+                self.state.set_state("sleep", manual=True, reason="用户请求助手休眠")
+            else:
+                self.state.touch_interaction()
         self.data_changed.emit()
         self.schedule_reminders()
 
@@ -191,6 +191,9 @@ class AppController(QObject):
     def _status(self, ident, text):
         if ident == self.current:
             self.status.emit(text)
+            self.pet_state.emit(
+                "thinking" if text.startswith(("正在理解", "正在连接")) else "working"
+            )
 
     @Slot(str)
     def _finished(self, ident):
@@ -201,7 +204,7 @@ class AppController(QObject):
             self.stream_timer.stop()
             self.partial.emit("")
             self.busy.emit(False)
-            self.status.emit("可以继续输入")
+            self.status.emit("等待你确认操作" if self.pending else "可以继续输入")
             self.pet_state.emit(self.state.get_pet_state())
             self.audio.inhibit_wake(False)
 
@@ -224,6 +227,7 @@ class AppController(QObject):
     @Slot()
     def new_session(self):
         self.cancel()
+        self.dispatcher.apps.last_launch = None
         self.active_session = self.history.create()
         self.session_loaded.emit([])
         self.history_changed.emit()
@@ -231,6 +235,7 @@ class AppController(QObject):
     @Slot(str)
     def load_session(self, ident):
         self.cancel()
+        self.dispatcher.apps.last_launch = None
         self.active_session = ident
         self.session_loaded.emit(self.history.messages(ident))
 
@@ -395,9 +400,7 @@ class AppController(QObject):
         service = AIService(apply_environment(copy.deepcopy(config)), self.db)
         self.background(
             "test_ai",
-            lambda cancel, chunk, status: service.ask(
-                [{"role": "user", "content": "请用一句话回复连接测试成功"}], cancel
-            ),
+            lambda cancel, chunk, status: service.test_tool_support(cancel),
         )
 
     def devices(self):

@@ -19,12 +19,13 @@ def test_chat_and_follow_up(qt_core, db, tmp_path, monkeypatch):
     controller = make_controller(db, tmp_path)
     contexts = []
 
-    def answer(context, cancel, chunk, status):
+    def answer(context, cancel, toolkit, chunk, status):
         contexts.append(context)
         chunk("reply")
         return "reply"
 
-    monkeypatch.setattr(controller.ai, "ask", answer)
+    monkeypatch.setattr(controller.ai, "is_configured", lambda: True)
+    monkeypatch.setattr(controller.ai, "converse", answer)
     try:
         controller.send("帮我写一段介绍")
         wait_for(qt_core, lambda: not controller.current)
@@ -44,11 +45,14 @@ def test_confirmation_and_cancel(qt_core, db, tmp_path, monkeypatch):
     )
     try:
         controller.send("清空回收站")
+        wait_for(qt_core, lambda: controller.pending is not None and not controller.current)
         assert controller.pending is not None
         assert invoked == []
         controller.confirm(False)
+        wait_for(qt_core, lambda: not controller.current)
         assert invoked == []
         controller.send("清空回收站")
+        wait_for(qt_core, lambda: controller.pending is not None and not controller.current)
         controller.confirm(True)
         wait_for(qt_core, lambda: not controller.current)
         assert invoked == ["recycle"]
@@ -60,12 +64,13 @@ def test_old_results_do_not_pollute_new_session(qt_core, db, tmp_path, monkeypat
     controller = make_controller(db, tmp_path)
     started = threading.Event()
 
-    def answer(context, cancel, chunk, status):
+    def answer(context, cancel, toolkit, chunk, status):
         started.set()
         cancel.wait(1)
         return "late old reply"
 
-    monkeypatch.setattr(controller.ai, "ask", answer)
+    monkeypatch.setattr(controller.ai, "is_configured", lambda: True)
+    monkeypatch.setattr(controller.ai, "converse", answer)
     try:
         old_session = controller.active_session
         controller.send("帮我写一段内容")
@@ -124,5 +129,20 @@ def test_unsaved_input_not_executed(qt_core, db, tmp_path, monkeypatch):
         controller.send("截图")
         assert not controller.current
         assert errors == ["error"]
+    finally:
+        controller.shutdown()
+
+
+def test_assistant_sleep_uses_shared_coordinator_without_cancelling_own_reply(
+    qt_core, db, tmp_path
+):
+    controller = make_controller(db, tmp_path)
+    messages = []
+    controller.message.connect(lambda role, text: messages.append(text))
+    try:
+        controller.send("进入休眠")
+        wait_for(qt_core, lambda: not controller.current)
+        assert controller.state.get_state() == "sleep"
+        assert not any("已取消接收" in text for text in messages)
     finally:
         controller.shutdown()

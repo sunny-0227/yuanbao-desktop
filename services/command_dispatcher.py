@@ -51,11 +51,12 @@ class CommandDispatcher:
             name = d["name"]
             path = Path(os.path.expandvars(name)).expanduser()
             if path.is_absolute() and path.exists():
-                if not hasattr(os, "startfile"):
-                    raise RuntimeError("打开本地文件仅支持 Windows")
-                os.startfile(str(path))
-                return "已打开本地文件。"
+                return self.apps.open_path(str(path))
             return self.apps.open_entry(name)
+        if a == "open_path":
+            return self.apps.open_path(d["path"])
+        if a == "check_open":
+            return self.apps.check_last_launch()
         if a == "find_app":
             return self.apps.find_entry_path(d["name"])
         if a == "search":

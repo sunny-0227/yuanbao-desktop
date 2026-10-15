@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.identity import APP_NAME, APP_VERSION
 from ui.chat_window import ChatWindow
 from ui.library_panel import LibraryPanel
 from ui.settings_window import SettingsWindow
@@ -22,7 +23,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, config):
         super().__init__()
-        self.setWindowTitle("元宝桌面助手")
+        self.setWindowTitle(f"{APP_NAME} · {APP_VERSION}")
         self.setMinimumSize(840, 560)
         self.resize(max(840, config.ui.window_width), max(560, config.ui.window_height))
         central = QWidget()

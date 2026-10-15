@@ -5,6 +5,7 @@ import pytest
 from app.config import AppConfig
 from services import app_command_service as commands
 from services import app_discovery_service as discovery
+from services import app_launch_service as launching
 from services.command_router import CommandRouter
 
 
@@ -35,8 +36,14 @@ def test_stale_default_replaced_by_actual_installation_and_cached(tmp_path, monk
     launcher = commands.AppCommandService(cfg, service)
     monkeypatch.setattr(commands, "is_windows", lambda: True)
     opened = []
-    monkeypatch.setattr(commands, "_startfile", opened.append)
-    assert "已打开" in launcher.open_entry("微信")
+    monkeypatch.setattr(launching, "is_windows", lambda: True)
+    monkeypatch.setattr(launching.os, "startfile", opened.append, raising=False)
+    monkeypatch.setattr(
+        launching,
+        "observe_launch",
+        lambda name, path, activate=False: launching.LaunchOutcome(name, path, "window"),
+    )
+    assert "可见窗口" in launcher.open_entry("微信")
     assert opened == [actual]
     assert actual in launcher.find_entry_path("微信")
     assert opened == [actual]  # 查询不再次启动软件

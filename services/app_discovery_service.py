@@ -642,10 +642,10 @@ class AppDiscoveryService:
         return self._match_entry(name, index)
 
     @staticmethod
-    def _match_entry(name, index):
+    def _matching_entries(name, index):
         query = _name_key(name)
         if not query:
-            return None
+            return []
         exact, aliases, partial = [], [], []
         for category in ("apps", "folders", "websites", "system_tools"):
             for label, original in index.get(category, {}).items():
@@ -678,15 +678,31 @@ class AppDiscoveryService:
             target = entry.get("path") or entry.get("url") or entry.get("command")
             if target:
                 unique.setdefault(os.path.normcase(target), entry)
-        if len(unique) > 1:
+        return list(unique.values())
+
+    def find_candidates(self, name):
+        matches = self._matching_entries(name, self.load_app_index())
+        if not matches:
+            index = self.build_app_index()
+            try:
+                self.save_app_index(index)
+            except OSError as exc:
+                logger.warning("应用索引暂未保存：%s", exc)
+            matches = self._matching_entries(name, index)
+        return matches[:12]
+
+    @staticmethod
+    def _match_entry(name, index):
+        matches = AppDiscoveryService._matching_entries(name, index)
+        if len(matches) > 1:
             options = "\n".join(
                 f"• {e.get('display_name', name)}：{e.get('path') or e.get('url') or e.get('command')}"
-                for e in list(unique.values())[:5]
+                for e in matches[:5]
             )
             raise ValueError(
                 f"找到多个「{name}」入口，暂未打开：\n{options}\n请使用更完整的软件名称或直接提供其中的路径。"
             )
-        return next(iter(unique.values()), None)
+        return next(iter(matches), None)
 
     def count_summary(self, index: dict) -> tuple[int, int, int]:
         """返回 (apps数, folders数, websites数) 用于通知文案"""

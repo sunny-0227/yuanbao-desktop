@@ -58,4 +58,6 @@ class ChatHistory:
     def delete(self, ident):
         with self.db.connect() as conn:
             conn.execute("DELETE FROM messages WHERE session_id=?", (ident,))
+            conn.execute("DELETE FROM conversation_state WHERE session_id=?", (ident,))
+            conn.execute("DELETE FROM tool_events WHERE session_id=?", (ident,))
             conn.execute("DELETE FROM sessions WHERE id=?", (ident,))

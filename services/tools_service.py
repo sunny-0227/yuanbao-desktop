@@ -98,7 +98,6 @@ class ToolsService:
             entry = self.apps._lookup(data["name"])
             if not entry or entry.get("category") != "apps":
                 raise ValueError("请先在快捷入口中配置这个软件")
-            import psutil
 
             target = Path(
                 os.path.expandvars(entry.get("path") or entry.get("command", ""))
@@ -108,11 +107,9 @@ class ToolsService:
                 or not target
             ):
                 raise ValueError("不能通过助手关闭系统核心进程")
-            pids = {
-                p.pid
-                for p in psutil.process_iter(["name"])
-                if (p.info["name"] or "").lower() == target
-            }
+            from services.app_launch_service import _process_ids
+
+            pids = _process_ids(os.path.expandvars(entry.get("path") or entry.get("command", "")))
             from ctypes import wintypes
 
             from app.windows import user32_api

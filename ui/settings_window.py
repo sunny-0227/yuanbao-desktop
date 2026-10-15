@@ -61,7 +61,7 @@ class SettingsWindow(QWidget):
         self.endpoints = self._table(["根地址", "模型", "密钥"], min_height=140)
         ai.addRow("备用接口", self.endpoints)
         ai.addRow(self._table_buttons(self.endpoints))
-        test = QPushButton("测试当前 AI 连接")
+        test = QPushButton("测试连接与工具调用")
         test.clicked.connect(self._test)
         ai.addRow(test)
         voice = self._page("语音")
@@ -300,7 +300,7 @@ class SettingsWindow(QWidget):
     def _test(self):
         try:
             self.test_requested.emit(self.read())
-            self.status.setText("正在测试连接…")
+            self.status.setText("正在检查连接和模型的工具调用支持…")
         except Exception as exc:
             QMessageBox.warning(self, "请检查设置", str(exc))
 

@@ -1,5 +1,6 @@
 """确定性指令识别：明确动作才执行，否定、解释与引用优先交给对话。"""
 
+import ntpath
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -18,13 +19,48 @@ class CommandRouter:
         raw = text.strip().strip("。！! ")
         norm = re.sub(r"^(请|帮我|麻烦你|麻烦|元宝)[，,\s]*", "", raw)
         if not norm or re.search(
-            r"不要|别(?:给我|帮我)?|不需要|不想|禁止|不用|解释|为什么|如何|怎么|写一|帮我写|生成|总结|翻译|分析|[“”\"‘’]",
+            r"不要|别(?:给我|帮我)?|不需要|不想|禁止|不用|解释|为什么|如何|怎么|写一|帮我写|生成|总结|翻译|分析",
             norm,
         ):
             return CommandResult(False)
 
         def hit(action, data=None, confirm=False):
             return CommandResult(True, action=action, data=data or {}, confirmation=confirm)
+
+        if norm.rstrip("？?") in (
+            "打开了吗",
+            "打开了嘛",
+            "打开了么",
+            "打开了没",
+            "打开没有",
+            "打开了没有",
+            "启动了吗",
+            "启动成功了吗",
+            "打开成功了吗",
+            "刚才打开了吗",
+            "有没有打开",
+            "软件打开了吗",
+        ):
+            return hit("check_open")
+
+        # 明确的路径启动命令优先识别；引号是路径定界符，不应使请求落入AI聊天。
+        explicit = re.fullmatch(r"(?:打开|启动|运行)\s*(.+)", norm)
+        suffix = re.fullmatch(r"(.+?)\s*(?:打开|启动|运行)", norm)
+        target = (explicit[1] if explicit else suffix[1] if suffix else "").strip()
+        if target:
+            target = re.sub(r"\s*(?:这个|这个软件|这个程序)$", "", target).strip()
+            pairs = {'"': '"', "'": "'", "“": "”", "‘": "’"}
+            if target[:1] in pairs and target.endswith(pairs[target[0]]):
+                target = target[1:-1].strip()
+            drive, rest = ntpath.splitdrive(target)
+            if (
+                drive
+                and rest.startswith(("\\", "/"))
+                and not any(c in target for c in ('"', "'", "“", "”", "\n", "\r"))
+            ):
+                return hit("open_path", {"path": target})
+        if re.search(r"[“”\"‘’]", norm):
+            return CommandResult(False)
 
         path_query = re.fullmatch(
             r"(?:(?:你)?(?:帮我)?(?:找一下|找下|查一下|查下|查找|查询|查|查看|找)(?:我)?\s*(.+?)(?:的)?(?:安装路径|安装位置|路径|地址|位置)|(.+?)(?:的)?(?:安装路径|安装位置|路径|地址|位置)(?:在哪(?:里)?|是什么))",

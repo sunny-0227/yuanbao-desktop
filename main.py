@@ -14,7 +14,7 @@ def main():
     from app.app_context import data_path, get_base_path
     from app.config import ConfigStore
     from app.controller import AppController
-    from app.identity import APP_NAME, ORGANIZATION
+    from app.identity import APP_NAME, APP_VERSION, ORGANIZATION
     from app.logger import setup_logger
     from app.storage import Database
     from ui.floating_pet import FloatingPetWindow
@@ -26,7 +26,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(ORGANIZATION)
-    app.setApplicationVersion("2.0.0")
+    app.setApplicationVersion(APP_VERSION)
     app.setQuitOnLastWindowClosed(False)
     # 明确 .env 查找路径，双击 exe 不依赖工作目录。
     env_root = (
@@ -104,7 +104,7 @@ def main():
         answer = QMessageBox.question(
             window,
             "确认操作",
-            descriptions.get(command.action, "确定执行这个操作？"),
+            descriptions.get(command.action, command.data.get("summary", "确定执行这个操作？")),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
