@@ -124,6 +124,8 @@ docs/       架构、素材要求和验收说明
 
 ## 测试与打包
 
+GitHub Actions通过Windows测试后，会生成单文件核心版 `Yuanbao.exe`。在仓库 **Actions → 最新成功的 Windows checks → Artifacts** 下载 `Yuanbao-Windows-x64`，解压后即可运行，无需安装Python。下载附件需要登录GitHub，保留30天。此版本不含语音依赖；需要录音与播报时按下面的 `--voice` 方式构建。
+
 安装开发依赖后执行：
 
 ```bat

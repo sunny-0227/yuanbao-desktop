@@ -17,4 +17,12 @@ jobs:
       - run: python -m pip install -r requirements-dev.txt -r requirements-win.txt
       - run: python -m ruff check app services ui main.py scripts tests
       - run: python -m pytest -q
-      - run: python scripts/build_exe.py
+      - name: Build Yuanbao.exe
+        run: python scripts/build_exe.py --onefile
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yuanbao-Windows-x64
+          path: dist/Yuanbao.exe
+          if-no-files-found: error
+          retention-days: 30
