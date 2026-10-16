@@ -1,7 +1,7 @@
 """统一产品名称；旧标识只用于已有安装兼容。"""
 
 APP_NAME = "元宝桌面助手"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 PET_NAME = "元宝"
 APP_ID = "Yuanbao"
 ORGANIZATION = "YuanbaoDesktop"

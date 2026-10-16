@@ -46,7 +46,7 @@ class ChatHistory:
                 )
             ]
 
-    def context(self, session_id, max_chars=16000):
+    def context(self, session_id, max_chars=6000):
         chosen, size = [], 0
         for row in reversed(self.messages(session_id)):
             if size + len(row["content"]) > max_chars and chosen:

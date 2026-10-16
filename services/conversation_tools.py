@@ -150,6 +150,13 @@ DEFINITIONS = [
     ("cancel_pending", "取消当前尚未执行的选择、草稿或确认。", {}, []),
     ("retry_last", "重试当前会话上一项明确操作；危险操作仍需重新确认。", {}, []),
 ]
+
+
+def _wire_property(spec):
+    # 完整约束仍由validate执行；接口无需反复携带长度/数值范围等校验元数据。
+    return {k: v for k, v in spec.items() if k in {"type", "enum"}}
+
+
 SCHEMAS = [
     {
         "type": "function",
@@ -158,7 +165,7 @@ SCHEMAS = [
             "description": desc,
             "parameters": {
                 "type": "object",
-                "properties": props,
+                "properties": {key: _wire_property(value) for key, value in props.items()},
                 "required": required,
                 "additionalProperties": False,
             },
@@ -232,17 +239,24 @@ class ConversationTools:
         self.user_text = next((r["content"] for r in reversed(context) if r["role"] == "user"), "")
 
     def context_state(self):
-        state = dict(self.state)
+        state = self.model_result(self.state)
+        if state.get("choices"):
+            state["choices"] = self._candidate_summary(state["choices"])
+        state.pop("last_action", None)  # retry_last在本机读取完整记录，无需重复发送正文。
         if state.get("confirmation"):
             state["confirmation"] = {k: v for k, v in state["confirmation"].items() if k != "token"}
         events, size = [], 0
-        for event in reversed(self.store.recent()):
+        for event in reversed(self.store.recent(limit=3)):
             event["result"] = self.model_result(event["result"])
             event["arguments"] = {
-                k: v[:1000] if isinstance(v, str) else v for k, v in event["arguments"].items()
+                k: v[:300] if isinstance(v, str) else v for k, v in event["arguments"].items()
+            }
+            event["result"] = {
+                "status": event["status"],
+                "message": event["result"].get("message", "")[:600],
             }
             length = len(json.dumps(event, ensure_ascii=False))
-            if events and size + length > 16000:
+            if events and size + length > 2400:
                 break
             events.insert(0, event)
             size += length
@@ -254,8 +268,21 @@ class ConversationTools:
         }
 
     @staticmethod
+    def _candidate_summary(entries):
+        return [
+            {
+                k: v
+                for k, v in row.items()
+                if k in {"id", "display_name", "path", "command", "category"}
+            }
+            for row in entries[:12]
+        ]
+
+    @staticmethod
     def model_result(result):
         value = dict(result)
+        if value.get("candidates"):
+            value["candidates"] = ConversationTools._candidate_summary(value["candidates"])
         if value.get("confirmation"):
             value["confirmation"] = {k: v for k, v in value["confirmation"].items() if k != "token"}
         if isinstance(value.get("message"), str):

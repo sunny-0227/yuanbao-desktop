@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -17,6 +18,27 @@ class ModelTurn:
 
 class AIError(RuntimeError):
     pass
+
+
+def unsupported_execution_claim(text):
+    """只识别直接的执行回执；能力介绍、否定、条件句和引用不构成执行证据。"""
+    for clause in re.split(r"[。！？!?；;\n]", text):
+        clause = re.sub(r"^[\s*#\-\d.)✅✔️]+", "", clause).strip()
+        if clause.startswith((">", "`", '"', "“", "「", "'")):
+            continue
+        clause = re.sub(r"^(?:好的|好|根据你的要求)[，,:：\s]+", "", clause)
+        if re.match(
+            r"^(?:(?:我|元宝)?(?:已经|已|正在)(?:帮你|为你)?|"
+            r"(?:我|元宝)(?:帮你|为你)(?:已经|已|正在))"
+            r"(?:成功)?(?:打开|启动|扫描|删除|创建|设置|保存|关闭|清空)",
+            clause,
+        ):
+            return True
+        if re.match(
+            r"^(?:I have |I've |I )(?:opened|launched|deleted|created|saved)\b", clause, re.I
+        ):
+            return True
+    return False
 
 
 class AIService:
@@ -218,8 +240,6 @@ class AIService:
             return None
 
     async def _agent_run(self, context, cancel, toolkit, on_chunk, on_status):
-        import re
-
         import httpx
 
         from services.conversation_tools import SCHEMAS
@@ -296,11 +316,8 @@ class AIService:
                     break
                 if not turn.tool_calls:
                     answer = toolkit.authoritative_reply(turn.content)
-                    if not toolkit.results and re.search(
-                        r"已(?:经)?(?:打开|启动|扫描|删除|创建|设置)|PID\s*[:：]?\s*\d+|正在打开",
-                        answer,
-                    ):
-                        answer = "本轮模型没有调用实际工具，因此没有执行本机操作，也不能确认操作已完成。请重试或在设置中换用支持工具调用的模型。"
+                    if not toolkit.results and unsupported_execution_claim(answer):
+                        answer = "本轮没有执行本机操作，不能确认操作完成。你可以让我执行具体操作，我会根据真实结果回复。"
                     if not answer.strip():
                         raise AIError("模型没有返回文字或工具调用，请检查所选模型是否支持工具调用")
                     on_chunk(answer)

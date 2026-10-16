@@ -537,3 +537,63 @@ def test_deleted_session_is_not_resurrected_by_late_tool_result(db):
     assert store.load() == {} and store.recent() == []
     with pytest.raises(RuntimeError, match="会话已删除"):
         store.start("save_note", {"content": "cannot execute"})
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "是呀，我是 AI。可以帮你打开软件、设置提醒。",
+        "如果微信已经打开，可以看看任务栏。",
+        "我没有打开软件。",
+        "你可以在日志里查找“已打开”这句话。",
+        "我的形象已经设置为长毛金虎斑猫。",
+        "PID 是进程编号，例如 PID: 1234。",
+    ],
+)
+def test_chitchat_explanation_does_not_require_tool_receipt(db, monkeypatch, answer):
+    engine, history, session = system(db, True)
+
+    async def request(endpoint, messages, chunk, tools=None):
+        return ModelTurn(answer)
+
+    monkeypatch.setattr(engine.ai, "_request", request)
+    assert say(engine, history, session, "你是AI吗").text == answer
+    assert not ConversationStore(db, session).recent()
+
+
+@pytest.mark.parametrize(
+    "answer", ["已经打开微信。", "我已经帮你打开微信。", "✅ 已创建提醒。", "I've launched WeChat."]
+)
+def test_direct_execution_claim_still_needs_real_receipt(db, monkeypatch, answer):
+    engine, history, session = system(db, True)
+
+    async def request(endpoint, messages, chunk, tools=None):
+        return ModelTurn(answer)
+
+    monkeypatch.setattr(engine.ai, "_request", request)
+    assert "没有执行本机操作" in say(engine, history, session, "打开微信").text
+
+
+def test_model_snapshot_compacts_candidate_metadata_but_keeps_local_state(db):
+    engine, history, session = system(db)
+    store = ConversationStore(db, session)
+    entry = {
+        "id": "choice-1",
+        "display_name": "工作台",
+        "path": "D:/client.exe",
+        "aliases": ["metadata" * 1000],
+        "source": "registry_install",
+    }
+    store.save(
+        {
+            "choices": [entry],
+            "focus": {"kind": "app_choices"},
+            "last_action": {"name": "save_note", "arguments": {"content": "正文" * 4000}},
+        }
+    )
+    tools = ConversationTools(engine.dispatcher, db, session, [], Event())
+    snapshot = tools.context_state()
+    assert snapshot["current_task"]["choices"][0]["id"] == "choice-1"
+    assert "aliases" not in snapshot["current_task"]["choices"][0]
+    assert len(json.dumps(snapshot, ensure_ascii=False)) < 1000
+    assert store.load()["last_action"]["arguments"]["content"] == "正文" * 4000

@@ -20,6 +20,7 @@ import re
 import shutil
 import time
 from datetime import datetime
+from functools import lru_cache
 from typing import Optional
 
 from app.app_context import data_path
@@ -59,6 +60,11 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "google chrome": ["Chrome", "谷歌浏览器"],
     "mozilla firefox": ["Firefox", "火狐浏览器"],
     "wps office": ["WPS"],
+    "microsoft word": ["Word", "WINWORD", "Microsoft Office Word", "微软Word"],
+    "microsoft excel": ["Excel", "Microsoft Office Excel", "微软Excel"],
+    "microsoft powerpoint": ["PowerPoint", "POWERPNT", "Microsoft Office PowerPoint", "PPT"],
+    "microsoft outlook": ["Outlook"],
+    "microsoft onenote": ["OneNote"],
     "剪映专业版": ["剪映"],
     "adobe photoshop": ["PS", "Photoshop"],
     "adobe premiere": ["PR", "Premiere"],
@@ -176,6 +182,54 @@ def _build_aliases(display_name: str) -> list[str]:
 
 def _name_key(name):
     return re.sub(r"[\s._-]+", "", name).casefold()
+
+
+def _entry_aliases(display, path=""):
+    """图标可被重命名；已验证目标的程序名仍然可以用于查找。"""
+    names = _build_aliases(display)
+    stem, suffix = ntpath.splitext(ntpath.basename(path))
+    if suffix.casefold() == ".exe":
+        names += _build_aliases(stem)
+        for identity in _executable_identity(path):
+            names += _build_aliases(identity)
+    return list(dict.fromkeys(names))
+
+
+def _executable_identity(path):
+    if platform.system() != "Windows" or re.search(
+        r"helper|updat|unins|setup|crash|service|broker|renderer|notification|daemon|host",
+        ntpath.basename(path),
+        re.I,
+    ):
+        return ()
+    try:
+        stat = os.stat(path)
+        return _read_executable_identity(path, stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return ()
+
+
+@lru_cache(maxsize=1024)
+def _read_executable_identity(path, modified, size):
+    """只读版本资源，不运行软件。缓存随文件修改/替换自动失效。"""
+    try:
+        import win32api
+
+        translations = win32api.GetFileVersionInfo(path, r"\VarFileInfo\Translation")
+        names = []
+        for language, codepage in translations[:4]:
+            for field in ("FileDescription", "OriginalFilename"):
+                try:
+                    value = win32api.GetFileVersionInfo(
+                        path, rf"\StringFileInfo\{language:04x}{codepage:04x}\{field}"
+                    ).strip("\x00 ")
+                    if value and len(value) <= 200:
+                        names.append(re.sub(r"\.exe$", "", value, flags=re.I))
+                except Exception:
+                    continue
+        return tuple(dict.fromkeys(names))
+    except Exception:
+        return ()
 
 
 def _is_app_file(path):
@@ -403,6 +457,8 @@ class AppDiscoveryService:
     def scan_registered_apps(self):
         """读取当前用户/系统、32/64位的应用注册信息；支持自定义安装盘。"""
         apps = []
+        locations = {}
+        deadline = time.monotonic() + 10
         if platform.system() != "Windows":
             return apps
         try:
@@ -419,6 +475,8 @@ class AppDiscoveryService:
                 access = winreg.KEY_READ | view
                 for branch, source in branches:
                     for subkey in _registry_subkeys(winreg, root, branch, access):
+                        if time.monotonic() > deadline:
+                            return apps
                         try:
                             with winreg.OpenKey(root, branch + "\\" + subkey, 0, access) as key:
                                 if source == "registry_app_path":
@@ -431,38 +489,75 @@ class AppDiscoveryService:
                                     path = _safe_executable(
                                         _registry_value(winreg, key, "DisplayIcon")
                                     )
-                                    if not path:
-                                        location = _registry_value(winreg, key, "InstallLocation")
-                                        path = self._find_installed_exe(location, name)
+                                    location = _registry_value(winreg, key, "InstallLocation")
+                                    if location:
+                                        locations.setdefault(location, set()).add(name)
                                 if name and path:
                                     apps.append(
                                         {"display_name": name, "path": path, "source": source}
                                     )
                         except OSError:
                             continue
+        # 先读完注册表入口，避免一个大安装目录耗尽后续App Paths的识别时间。
+        deadline = time.monotonic() + 5
+        for location, registered_names in locations.items():
+            if time.monotonic() > deadline:
+                break
+            registered_aliases = {
+                _name_key(alias) for label in registered_names for alias in _build_aliases(label)
+            }
+            for exe in self._installed_executables(location):
+                if time.monotonic() > deadline:
+                    break
+                identities = _executable_identity(exe)
+                stem = ntpath.splitext(ntpath.basename(exe))[0]
+                if identities:
+                    label = identities[0]
+                elif registered_aliases.intersection(_name_key(n) for n in _build_aliases(stem)):
+                    label = next(iter(sorted(registered_names)))
+                else:
+                    continue
+                apps.append({"display_name": label, "path": exe, "source": "registry_install"})
         return apps
 
     @staticmethod
     def _find_installed_exe(location, name):
-        if not location or not os.path.isdir(_expand(location)):
-            return ""
         aliases = {_name_key(n) for n in _build_aliases(name)}
+        matches = [
+            path
+            for path in AppDiscoveryService._installed_executables(location)
+            if aliases.intersection(
+                _name_key(n)
+                for n in _entry_aliases(ntpath.splitext(ntpath.basename(path))[0], path)
+            )
+        ]
+        return sorted(set(matches), key=lambda p: (len(p), p.casefold()))[0] if matches else ""
+
+    @staticmethod
+    def _installed_executables(location):
+        if not location or not os.path.isdir(_expand(location)):
+            return []
         matches = []
         visited = 0
+        checked = 0
+        deadline = time.monotonic() + 2
         root = _expand(location)
         for directory, children, files in os.walk(root, followlinks=False):
             visited += 1
-            if visited > 100:
+            if visited > 100 or time.monotonic() > deadline:
                 break
-            if os.path.relpath(directory, root).count(os.sep) >= 2:
+            if os.path.relpath(directory, root).count(os.sep) >= 3:
                 children[:] = []
             children[:] = [d for d in children if not os.path.islink(os.path.join(directory, d))]
             for filename in files:
-                if _name_key(os.path.splitext(filename)[0]) in aliases:
+                checked += 1
+                if checked > 1000 or time.monotonic() > deadline:
+                    return matches
+                if filename.casefold().endswith(".exe"):
                     path = _safe_executable(os.path.join(directory, filename))
                     if path:
                         matches.append(path)
-        return sorted(set(matches), key=lambda p: (len(p), p.casefold()))[0] if matches else ""
+        return matches
 
     def scan_running_apps(self):
         """只读取现有进程的程序位置，不结束或启动进程。"""
@@ -522,7 +617,7 @@ class AppDiscoveryService:
             if not _is_app_file(entry.get("path", "")):
                 continue
             name = entry["display_name"]
-            aliases = _build_aliases(name)
+            aliases = _entry_aliases(name, entry["path"])
             record = {
                 "display_name": name,
                 "path": entry["path"],
@@ -658,7 +753,9 @@ class AppDiscoveryService:
                     item = {"category": category, **entry}
                     display = entry.get("display_name", label)
                     names = {
-                        _name_key(n) for n in _build_aliases(display) + entry.get("aliases", [])
+                        _name_key(n)
+                        for n in _entry_aliases(display, entry.get("path", ""))
+                        + entry.get("aliases", [])
                     }
                     if query == _name_key(display):
                         exact.append(item)

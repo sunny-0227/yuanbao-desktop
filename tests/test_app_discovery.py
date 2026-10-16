@@ -275,3 +275,78 @@ def test_real_windows_shortcut_to_custom_location(tmp_path):
         assert entry["working_dir"] == str(tmp_path)
     finally:
         pythoncom.CoUninitialize()
+
+
+@pytest.mark.parametrize(
+    "query,filename", [("word", "WINWORD.exe"), ("PPT", "POWERPNT.EXE"), ("Excel", "EXCEL.EXE")]
+)
+def test_office_executable_identity_matches_renamed_shortcut(
+    tmp_path, monkeypatch, query, filename
+):
+    path = make_exe(tmp_path, filename)
+    service = service_with_inventory(
+        tmp_path,
+        monkeypatch,
+        [{"display_name": "我的办公工具", "path": path, "source": "desktop_shortcut"}],
+    )
+    assert service.resolve_entry(query)["path"] == path
+
+
+def test_program_metadata_finds_arbitrary_product_without_fixed_alias_map(tmp_path, monkeypatch):
+    path = make_exe(tmp_path, "client64.exe")
+    monkeypatch.setattr(
+        discovery,
+        "_executable_identity",
+        lambda p: ("蓝鲸工作台", "WhaleClient") if p == path else (),
+    )
+    service = service_with_inventory(
+        tmp_path,
+        monkeypatch,
+        [{"display_name": "我的工具", "path": path, "source": "desktop_shortcut"}],
+    )
+    assert service.resolve_entry("蓝鲸工作台")["path"] == path
+    assert service.resolve_entry("WhaleClient")["path"] == path
+    assert (
+        discovery.AppDiscoveryService._find_installed_exe(
+            str(__import__("pathlib").Path(path).parent), "蓝鲸工作台"
+        )
+        == path
+    )
+
+
+def test_registry_suite_expands_real_application_metadata(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = make_exe(tmp_path, "client.exe")
+    uninstall = r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
+    nodes = {
+        (1, uninstall): {"children": ["suite"]},
+        (1, uninstall + r"\suite"): {
+            "values": {"DisplayName": "综合办公套件", "InstallLocation": str(Path(path).parent)}
+        },
+    }
+    fake_registry(monkeypatch, nodes)
+    monkeypatch.setattr(discovery.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        discovery, "_executable_identity", lambda p: ("蓝鲸文档", "WhaleDocs") if p == path else ()
+    )
+    found = discovery.AppDiscoveryService().scan_registered_apps()
+    assert any(e["path"] == path and e["display_name"] == "蓝鲸文档" for e in found)
+
+
+def test_word_does_not_silently_substitute_wps(tmp_path, monkeypatch):
+    path = make_exe(tmp_path, "wps.exe")
+    service = service_with_inventory(
+        tmp_path,
+        monkeypatch,
+        [{"display_name": "WPS Office", "path": path, "source": "registry_install"}],
+    )
+    assert not service.find_candidates("word")
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows version resources only")
+def test_native_executable_version_resource_is_read_without_launch():
+    import sys
+
+    identities = discovery._executable_identity(sys.executable)
+    assert identities and any("python" in value.casefold() for value in identities)
